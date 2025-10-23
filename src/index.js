@@ -58,14 +58,14 @@ app.get(['/health', '/healthz'], async (req, res) => {
 
 // API routers (wire up when implemented)
 try {
-    const adminRoutes = require('./routes/admin/adminRoutes');
+    const adminRoutes = require('./routes/adminRoutes');
     app.use('/api/admin', adminRoutes);
 } catch (e) {
     console.warn('Admin routes not mounted:', e?.message || e);
 }
 
 try {
-    const userRoutes = require('./routes/user/userRoutes');
+    const userRoutes = require('./routes/userRoutes');
     if (typeof userRoutes === 'function' || userRoutes?.stack) {
         app.use('/api/user', userRoutes);
     } else {
