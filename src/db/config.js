@@ -38,7 +38,7 @@ if (connectionString) {
 
 const containerName = process.env.AZURE_STORAGE_CONTAINER || 'media';
 
-module.exports = {
+module.exports = {  
     supabase,
     supabaseAdmin,
     blobServiceClient,
