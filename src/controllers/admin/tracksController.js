@@ -2,6 +2,7 @@ const createError = require('http-errors');
 const mime = require('mime-types');
 const { v4: uuidv4 } = require('uuid');
 const { supabase, supabaseAdmin } = require('../../db/config');
+const { processAudioBuffer } = require('../../middleware/processAudio');
 const { listTracks, getTrack, createTrack, updateTrack, deleteTrack } = require('../../models/trackModel');
 
 // buckets
@@ -68,7 +69,6 @@ async function create(req, res) {
     // ensure cover file present
     const coverFile = getFileFromReq(req, 'cover');
     if (!coverFile) throw createError(400, 'cover file is required');
-
     // create or use provided track_id so we can name files deterministically
     const trackId = (body.track_id && typeof body.track_id === 'string') ? body.track_id : uuidv4();
     body.track_id = trackId;
@@ -89,14 +89,26 @@ async function create(req, res) {
         if (videoUrl) body.video_url = videoUrl;
     }
 
-    // audio_files: if audio was processed by middleware, attach the resulting files map
-    if (req.audioInfo && req.audioInfo.files) {
-        body.audio_files = req.audioInfo.files;
-    } else {
-        body.audio_files = null; // TODO: implement audio_files upload in future
+    // initially create track without audio_files and is_published=false
+    body.audio_files = null;
+    body.is_published = false;
+    const created = await createTrack(body);
+
+    // if audio file present, process it now using the canonical created.track_id
+    const audioFile = getFileFromReq(req, 'audio');
+    if (audioFile) {
+        try {
+            const audioResult = await processAudioBuffer(audioFile, created.track_id);
+            const updated = await updateTrack(created.track_id, { audio_files: audioResult.files, is_published: true });
+            return res.status(201).json(updated);
+        } catch (e) {
+            console.error('Audio processing failed after track creation:', e?.message || e);
+            // return created record but indicate processing failed
+            return res.status(500).json({ error: 'Audio processing failed', track: created });
+        }
     }
 
-    const created = await createTrack(body);
+    // no audio to process — return created (not published)
     res.status(201).json(created);
 }
 
@@ -123,8 +135,16 @@ async function update(req, res) {
     }
 
     // audio_files TODO
-    if (req.audioInfo && req.audioInfo.files) {
-        body.audio_files = req.audioInfo.files;
+    const audioFile = getFileFromReq(req, 'audio');
+    if (audioFile) {
+        try {
+            const audioResult = await processAudioBuffer(audioFile, id);
+            body.audio_files = audioResult.files;
+            body.is_published = true;
+        } catch (e) {
+            console.error('Audio processing failed during update:', e?.message || e);
+            // continue and update other fields, do not set is_published
+        }
     }
 
     const updated = await updateTrack(id, body);

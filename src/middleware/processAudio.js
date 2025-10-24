@@ -65,20 +65,10 @@ function getAudioFileFromReq(req) {
     return null;
 }
 
-async function processAndUploadAudio(req, res, next) {
-    const audioFile = getAudioFileFromReq(req);
-    if (!audioFile) return next(); // nothing to do
-
-    // ensure Azure is configured
-    if (!blobServiceClient || !containerClient) {
-        console.error('Azure blob storage not configured');
-        return res.status(500).json({ error: 'Storage not configured' });
-    }
-
-    // ensure track id exists or create one so uploads have deterministic path
-    const trackId = (req.body && req.body.track_id && typeof req.body.track_id === 'string') ? req.body.track_id : uuidv4();
-    req.body = req.body || {};
-    req.body.track_id = trackId;
+// Helper: process audio buffer and upload variants to blob storage for a given trackId
+async function processAudioBuffer(audioFile, trackId) {
+    if (!audioFile) throw new Error('No audio file provided');
+    if (!blobServiceClient) throw new Error('Azure Blob Storage not configured');
 
     const tmpDir = path.join(os.tmpdir(), 'musee_audio');
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
@@ -86,68 +76,70 @@ async function processAndUploadAudio(req, res, next) {
     const originalName = path.parse(audioFile.originalname || 'audio').name;
     const infile = path.join(tmpDir, `${uuidv4()}_${originalName}${path.extname(audioFile.originalname) || '.in'}`);
 
+    // write buffer to temp file (multer memoryStorage)
+    if (audioFile.buffer) {
+        fs.writeFileSync(infile, audioFile.buffer);
+    } else if (audioFile.path) {
+        // disk storage
+        fs.copyFileSync(audioFile.path, infile);
+    } else {
+        throw new Error('Unsupported audio file input');
+    }
+
+    const metadata = await ffprobe(infile);
+    const bitrate = metadata?.format?.bit_rate ? Math.round(Number(metadata.format.bit_rate) / 1000) : null;
+    if (!bitrate) throw new Error('Unable to determine audio bitrate');
+
+    // variants to generate (kbps)
+    const variants = [96, 160, 320];
+    const generated = {};
+
+    // create mp3 at original bitrate
+    const mp3Ext = 'mp3';
+    const mp3Filename = `track_${trackId}_${bitrate}k.${mp3Ext}`;
+    const mp3Local = path.join(tmpDir, mp3Filename);
+    await convertToMp3(infile, mp3Local, bitrate);
+    const mp3Blob = `audio/${mp3Filename}`;
+    const mp3Url = await uploadToBlob(mp3Local, mp3Blob);
+    generated[`${bitrate}k_mp3`] = mp3Url;
+
+    // create ogg variants up to original bitrate
+    for (const kb of variants) {
+        if (bitrate >= kb) {
+            const oggExt = 'ogg';
+            const oggFilename = `track_${trackId}_${kb}k.${oggExt}`;
+            const oggLocal = path.join(tmpDir, oggFilename);
+            await convertToOgg(infile, oggLocal, kb);
+            const oggBlob = `audio/${oggFilename}`;
+            const oggUrl = await uploadToBlob(oggLocal, oggBlob);
+            generated[`${kb}k_ogg`] = oggUrl;
+        }
+    }
+
+    // cleanup temp files
+    try { fs.unlinkSync(infile); } catch (e) { }
+    Object.keys(generated).forEach((k) => {
+        const fname = generated[k].split('/').pop();
+        const local = path.join(tmpDir, fname);
+        try { if (fs.existsSync(local)) fs.unlinkSync(local); } catch (e) { }
+    });
+
+    return { bitrate, files: generated };
+}
+
+async function processAndUploadAudio(req, res, next) {
+    const audioFile = getAudioFileFromReq(req);
+    if (!audioFile) return next(); // nothing to do
+
     try {
-        // write buffer to temp file (multer memoryStorage)
-        if (audioFile.buffer) {
-            fs.writeFileSync(infile, audioFile.buffer);
-        } else if (audioFile.path) {
-            // disk storage
-            fs.copyFileSync(audioFile.path, infile);
-        } else {
-            throw new Error('Unsupported audio file input');
-        }
-
-        const metadata = await ffprobe(infile);
-        const bitrate = metadata?.format?.bit_rate ? Math.round(Number(metadata.format.bit_rate) / 1000) : null;
-        if (!bitrate) throw new Error('Unable to determine audio bitrate');
-
-        // variants to generate (kbps)
-        const variants = [96, 160, 320];
-        const generated = {};
-
-        // create mp3 at original bitrate
-        const mp3Ext = 'mp3';
-        const mp3Filename = `track_${trackId}_${bitrate}k.${mp3Ext}`;
-        const mp3Local = path.join(tmpDir, mp3Filename);
-        await convertToMp3(infile, mp3Local, bitrate);
-        const mp3Blob = `audio/${mp3Filename}`;
-        const mp3Url = await uploadToBlob(mp3Local, mp3Blob);
-        generated[`${bitrate}k_mp3`] = mp3Url;
-
-        // create ogg variants up to original bitrate
-        for (const kb of variants) {
-            if (bitrate >= kb) {
-                const oggExt = 'ogg';
-                const oggFilename = `track_${trackId}_${kb}k.${oggExt}`;
-                const oggLocal = path.join(tmpDir, oggFilename);
-                await convertToOgg(infile, oggLocal, kb);
-                const oggBlob = `audio/${oggFilename}`;
-                const oggUrl = await uploadToBlob(oggLocal, oggBlob);
-                generated[`${kb}k_ogg`] = oggUrl;
-            }
-        }
-
-        // attach processed info to request
-        req.audioInfo = {
-            bitrate,
-            files: generated,
-        };
-
-        // cleanup temp files
-        try { fs.unlinkSync(infile); } catch (e) { }
-        Object.keys(generated).forEach((k) => {
-            const fname = generated[k].split('/').pop();
-            const local = path.join(tmpDir, fname);
-            try { if (fs.existsSync(local)) fs.unlinkSync(local); } catch (e) { }
-        });
-
+        const trackId = (req.body && req.body.track_id && typeof req.body.track_id === 'string') ? req.body.track_id : uuidv4();
+        const result = await processAudioBuffer(audioFile, trackId);
+        req.audioInfo = result;
         next();
     } catch (err) {
         console.error('Audio processing error:', err?.message || err);
-        // attempt cleanup
-        try { if (fs.existsSync(infile)) fs.unlinkSync(infile); } catch (e) { }
         return res.status(400).json({ error: err?.message || 'audio processing failed' });
     }
 }
 
-module.exports = processAndUploadAudio;
+module.exports = { processAndUploadAudio, processAudioBuffer };
