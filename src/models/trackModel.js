@@ -66,6 +66,8 @@ function sanitizeInsert(payload = {}) {
 
     out.video_url = payload.video_url ? String(payload.video_url).trim() : null;
 
+    out.is_published = !!payload.is_published;
+
     out.created_at = new Date().toISOString();
     out.updated_at = new Date().toISOString();
 
@@ -95,6 +97,7 @@ function sanitizeUpdate(payload = {}) {
     if (payload.likes_count !== undefined) out.likes_count = Math.max(0, Math.trunc(toNum(payload.likes_count, 0)));
     if (payload.popularity_score !== undefined) out.popularity_score = Number(payload.popularity_score) || 0;
     if (payload.video_url !== undefined) out.video_url = typeof payload.video_url === 'string' ? payload.video_url.trim() : payload.video_url;
+    if (payload.is_published !== undefined) out.is_published = !!payload.is_published;
 
     return out;
 }

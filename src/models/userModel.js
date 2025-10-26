@@ -3,7 +3,7 @@ const { supabase, supabaseAdmin } = require('../db/config');
 const table = 'users';
 
 function client() {
-    return supabaseAdmin || supabase;
+    return supabaseAdmin;
 }
 
 // helpers
@@ -26,12 +26,16 @@ function toDate(v) {
 function sanitizeInsert(payload = {}) {
     const out = {};
     // user_id required (references auth.users.id)
-    if (!isUUID(payload.user_id)) throw new Error('user_id (UUID) is required');
+    if (payload.user_id && !isUUID(payload.user_id)) throw new Error('user_id (UUID) is invalid');
     out.user_id = payload.user_id;
 
     const name = typeof payload.name === 'string' ? payload.name.trim() : '';
     if (!name) throw new Error('name is required');
     out.name = name;
+
+    const email = typeof payload.email === 'string' ? payload.email.trim() : '';
+    if (!email) throw new Error('email is required');
+    out.email = email;
 
     out.subscription_type = typeof payload.subscription_type === 'string' && payload.subscription_type.trim()
         ? payload.subscription_type.trim()
@@ -74,6 +78,11 @@ function sanitizeUpdate(payload = {}) {
         const name = typeof payload.name === 'string' ? payload.name.trim() : '';
         if (!name) throw new Error('name cannot be empty');
         out.name = name;
+    }
+    if (payload.email !== undefined) {
+        const email = typeof payload.email === 'string' ? payload.email.trim() : '';
+        if (!email) throw new Error('email cannot be empty');
+        out.email = email;
     }
     if (payload.subscription_type !== undefined) {
         out.subscription_type = typeof payload.subscription_type === 'string' ? payload.subscription_type.trim() : payload.subscription_type;
@@ -120,14 +129,35 @@ async function listUsers({ limit = 20, offset = 0, q } = {}) {
 
     // Build base query
     let qb = client().from(table).select('*', { count: 'exact' }).order('created_at', { ascending: false });
+
     if (q) {
         // simple text search on name
         qb = qb.ilike('name', `%${q}%`);
     }
+    const { data, error, count } = await qb.range(start, end);
+
+    if (error) throw error;
+    return { items: data, total: count };
+}
+
+async function listUsersPublic({ limit = 20, offset = 0, q } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    // Only return public/basic fields for user-facing endpoints
+    let qb = client().from(table).select('user_id, name, avatar_url, subscription_type, user_type', { count: 'exact' }).order('created_at', { ascending: false });
+    if (q) qb = qb.ilike('name', `%${q}%`);
 
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
     return { items: data, total: count };
+}
+
+async function getUserPublic(user_id) {
+    const { data, error } = await client().from(table).select('user_id, name, avatar_url, subscription_type, user_type').eq('user_id', user_id).maybeSingle();
+    if (error) throw error;
+    return data;
 }
 
 async function getUser(user_id) {
@@ -155,4 +185,4 @@ async function deleteUser(user_id) {
     if (error) throw error;
 }
 
-module.exports = { listUsers, getUser, createUser, updateUser, deleteUser };
+module.exports = { listUsers, listUsersPublic, getUser, getUserPublic, createUser, updateUser, deleteUser };
