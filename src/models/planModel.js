@@ -1,4 +1,4 @@
-const { supabase, supabaseAdmin } = require('../db/config');
+const {supabaseAdmin } = require('../db/config');
 
 // Lightweight validation/coercion to avoid zod CJS issues
 const BILLING_CYCLES = new Set(['monthly', 'yearly', 'lifetime']);
@@ -78,8 +78,7 @@ function sanitizeUpdate(payload = {}) {
 const table = 'plans';
 
 function client() {
-    // Use admin client if available to bypass RLS for admin routes
-    return supabaseAdmin || supabase;
+    return supabaseAdmin;
 }
 
 async function listPlans() {

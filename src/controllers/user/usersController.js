@@ -1,6 +1,6 @@
 const createError = require('http-errors');
 const { listUsersPublic, getUserPublic, getUser, updateUser, deleteUser } = require('../../models/userModel');
-const { uploadAvatarToStorage } = require('../../utils/supabaseStorage');
+const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage} = require('../../utils/supabaseStorage');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -39,7 +39,7 @@ async function update(req, res) {
 
     // Handle avatar upload separately
     if (req.file) {
-        const avatarPath = await uploadAvatarToStorage(id, req.file);
+        const avatarPath = await uploadUserAvatarToStorage(id, req.file);
         if (avatarPath) payload.avatar_url = avatarPath;
     }
 
@@ -52,6 +52,11 @@ async function remove(req, res) {
     if (!req.user || req.user.id !== id) {
         return res.status(403).json({ message: 'Forbidden' });
     }
+    const user_info = await getUser(id);
+    if (!user_info) {
+        return res.status(404).json({ message: 'User not found' });
+    }
+    await deleteUserAvatarFromStorage(id, user_info.avatar_url);
     await deleteUser(id);
     res.status(204).send();
 }

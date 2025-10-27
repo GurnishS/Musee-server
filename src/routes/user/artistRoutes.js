@@ -1,14 +1,12 @@
 const express = require('express');
 const router = express.Router();
 
-const ctrl = require('../../controllers/admin/artistsController');
+const ctrl = require('../../controllers/user/artistsController');
 const uploadCover = require('../../middleware/uploadCover');
-const uploadAvatar = require('../../middleware/uploadAvatar');
-const uploadAvatarAndCover = require('../../middleware/uploadAvatarAndCover');
 
 router.get('/', ctrl.list);
 router.get('/:id', ctrl.getOne);
-router.post('/', uploadAvatarAndCover, ctrl.create);
+router.post('/', uploadCover, ctrl.create);
 router.patch('/:id', uploadCover, ctrl.update);
 router.delete('/:id', ctrl.remove);
 

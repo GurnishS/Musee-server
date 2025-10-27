@@ -23,12 +23,18 @@ function toDate(v) {
     return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+function generateStrongPassword() {
+    const length = 12;
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+~`|}{[]:;?><,./-=";
+    let password = "";
+    for (let i = 0, n = charset.length; i < length; ++i) {
+        password += charset.charAt(Math.floor(Math.random() * n));
+    }
+    return password;
+}
+
 function sanitizeInsert(payload = {}) {
     const out = {};
-    // user_id required (references auth.users.id)
-    if (payload.user_id && !isUUID(payload.user_id)) throw new Error('user_id (UUID) is invalid');
-    out.user_id = payload.user_id;
-
     const name = typeof payload.name === 'string' ? payload.name.trim() : '';
     if (!name) throw new Error('name is required');
     out.name = name;
@@ -37,37 +43,9 @@ function sanitizeInsert(payload = {}) {
     if (!email) throw new Error('email is required');
     out.email = email;
 
-    out.subscription_type = typeof payload.subscription_type === 'string' && payload.subscription_type.trim()
-        ? payload.subscription_type.trim()
-        : 'free';
-
-    if (payload.plan_id !== undefined && payload.plan_id !== null) {
-        if (!isUUID(payload.plan_id)) throw new Error('plan_id must be a UUID');
-        out.plan_id = payload.plan_id;
-    }
-
-    out.avatar_url = typeof payload.avatar_url === 'string' && payload.avatar_url.trim()
-        ? payload.avatar_url.trim()
-        : '/avatars/users/default_avatar.png';
-
-    if (payload.playlists !== undefined) {
-        if (!Array.isArray(payload.playlists)) throw new Error('playlists must be an array');
-        out.playlists = payload.playlists.map(String);
-    }
-
-    out.favorites = (payload.favorites && typeof payload.favorites === 'object') ? payload.favorites : {};
-
-    out.followers_count = Math.max(0, Math.trunc(toNum(payload.followers_count, 0)));
-    out.followings_count = Math.max(0, Math.trunc(toNum(payload.followings_count, 0)));
-
-    out.last_login_at = toDate(payload.last_login_at);
-
-    out.settings = (payload.settings && typeof payload.settings === 'object') ? payload.settings : {};
-
-    out.created_at = new Date().toISOString();
-    out.updated_at = new Date().toISOString();
-
-    out.user_type = typeof payload.user_type === 'string' && payload.user_type.trim() ? payload.user_type.trim() : 'listener';
+    const password = typeof payload.password === 'string' ? payload.password.trim() : generateStrongPassword();
+    if (!password) throw new Error('password is required');
+    out.password = password;
 
     return out;
 }
@@ -92,7 +70,7 @@ function sanitizeUpdate(payload = {}) {
         out.plan_id = payload.plan_id;
     }
     if (payload.avatar_url !== undefined) {
-        out.avatar_url = typeof payload.avatar_url === 'string' ? payload.avatar_url.trim() : payload.avatar_url;
+        out.avatar_url = typeof payload.avatar_url === 'string' ? payload.avatar_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/avatars/users/default_avatar.png';
     }
     if (payload.playlists !== undefined) {
         if (!Array.isArray(payload.playlists)) throw new Error('playlists must be an array');
@@ -140,26 +118,6 @@ async function listUsers({ limit = 20, offset = 0, q } = {}) {
     return { items: data, total: count };
 }
 
-async function listUsersPublic({ limit = 20, offset = 0, q } = {}) {
-    const start = Math.max(0, Number(offset) || 0);
-    const l = Math.max(1, Math.min(100, Number(limit) || 20));
-    const end = start + l - 1;
-
-    // Only return public/basic fields for user-facing endpoints
-    let qb = client().from(table).select('user_id, name, avatar_url, subscription_type, user_type', { count: 'exact' }).order('created_at', { ascending: false });
-    if (q) qb = qb.ilike('name', `%${q}%`);
-
-    const { data, error, count } = await qb.range(start, end);
-    if (error) throw error;
-    return { items: data, total: count };
-}
-
-async function getUserPublic(user_id) {
-    const { data, error } = await client().from(table).select('user_id, name, avatar_url, subscription_type, user_type').eq('user_id', user_id).maybeSingle();
-    if (error) throw error;
-    return data;
-}
-
 async function getUser(user_id) {
     const { data, error } = await client().from(table).select('*').eq('user_id', user_id).maybeSingle();
     if (error) throw error;
@@ -168,9 +126,20 @@ async function getUser(user_id) {
 
 async function createUser(payload) {
     const input = sanitizeInsert(payload);
-    const { data, error } = await client().from(table).insert(input).select('*').single();
-    if (error) throw error;
-    return data;
+    // create auth user (normal user) and mark email as confirmed
+    const authRes = await client().auth.admin.createUser({
+        email: input.email,
+        password: input.password,
+        user_metadata: { name: input.name },
+        email_confirm: true
+    });
+    if (authRes.error) throw authRes.error;
+    const createdUser = authRes.data?.user ?? authRes.user ?? authRes.data;
+    if (!createdUser || !createdUser.id) throw new Error('failed to create auth user');
+
+    //Supabase triggers automatically create corresponding profile in "users" table
+
+    return createdUser;
 }
 
 async function updateUser(user_id, payload) {
@@ -183,6 +152,27 @@ async function updateUser(user_id, payload) {
 async function deleteUser(user_id) {
     const { error } = await client().from(table).delete().eq('user_id', user_id);
     if (error) throw error;
+}
+
+//user functions
+async function listUsersPublic({ limit = 20, offset = 0, q } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    // Only return public/basic fields for user-facing endpoints
+    let qb = client().from(table).select('user_id, name, avatar_url', { count: 'exact' }).order('created_at', { ascending: false });
+    if (q) qb = qb.ilike('name', `%${q}%`);
+
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    return { items: data, total: count };
+}
+
+async function getUserPublic(user_id) {
+    const { data, error } = await client().from(table).select('user_id, name, followers_count, following_count, avatar_url, playlists').eq('user_id', user_id).maybeSingle();
+    if (error) throw error;
+    return data;
 }
 
 module.exports = { listUsers, listUsersPublic, getUser, getUserPublic, createUser, updateUser, deleteUser };

@@ -29,17 +29,27 @@ function sanitizeInsert(payload = {}) {
     if (!isUUID(payload.artist_id)) throw new Error('artist_id (UUID) is required');
     out.artist_id = payload.artist_id;
 
-    const name = typeof payload.name === 'string' ? payload.name.trim() : '';
-    if (!name) throw new Error('name is required');
-    out.name = name;
-
     out.bio = typeof payload.bio === 'string' ? payload.bio.trim() : '';
-    out.website = typeof payload.website === 'string' ? payload.website.trim() : null;
-    out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : null;
+    out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/artists/default_cover.png';
 
-    out.social = (payload.social && typeof payload.social === 'object') ? payload.social : {};
+    out.genres = Array.isArray(payload.genres) ? payload.genres.map(String) : [];
 
-    out.followers_count = Math.max(0, Math.trunc(toNum(payload.followers_count, 0)));
+    const debut_year = toNum(payload.debut_year, null);
+    if (!debut_year) throw new Error('debut_year is required');
+    out.debut_year = debut_year;
+
+    out.is_verified = typeof payload.is_verified === 'boolean' ? payload.is_verified : false;
+
+    out.monthly_listeners = typeof payload.monthly_listeners === 'number' ? Math.max(0, Math.trunc(payload.monthly_listeners)) : 0;
+
+    const region_id = isUUID(payload.region_id) ? payload.region_id : null;
+    if (!region_id) throw new Error('region_id is invalid or not provided');
+    out.region_id = region_id;
+
+    out.date_of_birth = toDate(payload.date_of_birth);
+
+    // social_links: optional object, default {}
+    out.social_links = (payload.social_links && typeof payload.social_links === 'object') ? payload.social_links : {};
 
     out.created_at = new Date().toISOString();
     out.updated_at = new Date().toISOString();
@@ -49,19 +59,39 @@ function sanitizeInsert(payload = {}) {
 
 function sanitizeUpdate(payload = {}) {
     const out = {};
-    if (payload.name !== undefined) {
-        const name = typeof payload.name === 'string' ? payload.name.trim() : '';
-        if (!name) throw new Error('name cannot be empty');
-        out.name = name;
-    }
     if (payload.bio !== undefined) out.bio = typeof payload.bio === 'string' ? payload.bio.trim() : payload.bio;
-    if (payload.website !== undefined) out.website = typeof payload.website === 'string' ? payload.website.trim() : payload.website;
     if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : payload.cover_url;
-    if (payload.social !== undefined) {
-        if (!(payload.social && typeof payload.social === 'object')) throw new Error('social must be an object');
-        out.social = payload.social;
+
+    if (payload.genres !== undefined) {
+        if (!Array.isArray(payload.genres)) throw new Error('genres must be an array');
+        out.genres = payload.genres.map(String);
     }
-    if (payload.followers_count !== undefined) out.followers_count = Math.max(0, Math.trunc(toNum(payload.followers_count, 0)));
+
+    if (payload.debut_year !== undefined) {
+        const v = Math.trunc(Number(payload.debut_year));
+        if (!Number.isFinite(v) || v <= 0) throw new Error('debut_year must be a positive number');
+        out.debut_year = v;
+    }
+
+    if (payload.is_verified !== undefined) out.is_verified = Boolean(payload.is_verified);
+
+    if (payload.monthly_listeners !== undefined) {
+        out.monthly_listeners = Math.max(0, Math.trunc(toNum(payload.monthly_listeners, 0)));
+    }
+
+    if (payload.region_id !== undefined) {
+        if (payload.region_id !== null && !isUUID(payload.region_id)) throw new Error('region_id must be a UUID or null');
+        out.region_id = payload.region_id;
+    }
+
+    if (payload.date_of_birth !== undefined) {
+        out.date_of_birth = toDate(payload.date_of_birth);
+    }
+
+    if (payload.social_links !== undefined) {
+        if (!(payload.social_links && typeof payload.social_links === 'object')) throw new Error('social_links must be an object');
+        out.social_links = payload.social_links;
+    }
     return out;
 }
 
@@ -70,7 +100,11 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
 
-    let qb = client().from(table).select('*', { count: 'exact' }).order('created_at', { ascending: false });
+    // Join artists with users and fetch all columns from both (users nested)
+    let qb = client()
+        .from(table)
+        .select('*, users:users!artists_artist_id_fkey(*)', { count: 'exact' })
+        .order('created_at', { ascending: false });
     if (q) qb = qb.ilike('bio', `%${q}%`);
 
     const { data, error, count } = await qb.range(start, end);
@@ -79,7 +113,11 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
 }
 
 async function getArtist(artist_id) {
-    const { data, error } = await client().from(table).select('*').eq('artist_id', artist_id).maybeSingle();
+    const { data, error } = await client()
+        .from(table)
+        .select('*, users:users!artists_artist_id_fkey(*)')
+        .eq('artist_id', artist_id)
+        .maybeSingle();
     if (error) throw error;
     return data;
 }
@@ -103,4 +141,69 @@ async function deleteArtist(artist_id) {
     if (error) throw error;
 }
 
-module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist };
+//public functions
+async function listArtistsPublic({ limit = 20, offset = 0, q } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    // Join artists with users to expose public profile fields from users
+    // Select only public fields
+    let qb = client()
+        .from(table)
+        .select(
+            `artist_id, cover_url, bio, genres, debut_year, is_verified, monthly_listeners,
+             users:users!artists_artist_id_fkey(name, avatar_url)`,
+            { count: 'exact' }
+        )
+        .order('created_at', { ascending: false });
+
+    if (q) {
+        // Search in artist bio or user name
+        qb = qb.or(`bio.ilike.%${q}%,users.name.ilike.%${q}%`);
+    }
+
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+
+    // Flatten nested users fields
+    const items = (data || []).map(row => ({
+        artist_id: row.artist_id,
+        name: row.users?.name || null,
+        avatar_url: row.users?.avatar_url || null,
+        cover_url: row.cover_url,
+        bio: row.bio,
+        genres: row.genres,
+        debut_year: row.debut_year,
+        is_verified: row.is_verified,
+        monthly_listeners: row.monthly_listeners,
+    }));
+
+    return { items, total: count };
+}
+
+async function getArtistPublic(artist_id) {
+    const { data, error } = await client()
+        .from(table)
+        .select(
+            `artist_id, cover_url, bio, genres, debut_year, is_verified, monthly_listeners,
+             users:users!artists_artist_id_fkey(name, avatar_url)`
+        )
+        .eq('artist_id', artist_id)
+        .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+        artist_id: data.artist_id,
+        name: data.users?.name || null,
+        avatar_url: data.users?.avatar_url || null,
+        cover_url: data.cover_url,
+        bio: data.bio,
+        genres: data.genres,
+        debut_year: data.debut_year,
+        is_verified: data.is_verified,
+        monthly_listeners: data.monthly_listeners,
+    };
+}
+
+module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, listArtistsPublic, getArtistPublic };
