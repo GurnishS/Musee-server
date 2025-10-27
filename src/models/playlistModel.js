@@ -58,6 +58,8 @@ function sanitizeInsert(payload = {}) {
     const genres = toTextArray(payload.genres);
     if (genres !== undefined) out.genres = genres;
 
+    out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/playlists/default_cover.png';
+
     out.likes_count = Math.max(0, Math.trunc(toNum(payload.likes_count, 0)));
     out.total_tracks = Math.max(0, Math.trunc(toNum(payload.total_tracks, 0)));
     out.play_count = Math.max(0, Math.trunc(toNum(payload.play_count, 0)));
@@ -89,6 +91,8 @@ function sanitizeUpdate(payload = {}) {
 
     const genres = toTextArray(payload.genres);
     if (genres !== undefined) out.genres = genres;
+
+    out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/playlists/default_cover.png';
 
     if (payload.likes_count !== undefined) out.likes_count = Math.max(0, Math.trunc(toNum(payload.likes_count, 0)));
     if (payload.total_tracks !== undefined) out.total_tracks = Math.max(0, Math.trunc(toNum(payload.total_tracks, 0)));

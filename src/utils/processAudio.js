@@ -127,19 +127,4 @@ async function processAudioBuffer(audioFile, trackId) {
     return { bitrate, files: generated };
 }
 
-async function processAndUploadAudio(req, res, next) {
-    const audioFile = getAudioFileFromReq(req);
-    if (!audioFile) return next(); // nothing to do
-
-    try {
-        const trackId = (req.body && req.body.track_id && typeof req.body.track_id === 'string') ? req.body.track_id : uuidv4();
-        const result = await processAudioBuffer(audioFile, trackId);
-        req.audioInfo = result;
-        next();
-    } catch (err) {
-        console.error('Audio processing error:', err?.message || err);
-        return res.status(400).json({ error: err?.message || 'audio processing failed' });
-    }
-}
-
-module.exports = { processAndUploadAudio, processAudioBuffer };
+module.exports = { processAudioBuffer };

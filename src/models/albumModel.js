@@ -65,7 +65,7 @@ function sanitizeInsert(payload = {}) {
 
     if (payload.release_date !== undefined) out.release_date = toDateOnly(payload.release_date);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : null;
-    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
+    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/albums/default_cover.png';
 
     const genres = toTextArray(payload.genres);
     if (genres !== undefined) out.genres = genres;
@@ -100,7 +100,7 @@ function sanitizeUpdate(payload = {}) {
     }
     if (payload.release_date !== undefined) out.release_date = toDateOnly(payload.release_date);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : payload.description;
-    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : payload.cover_url;
+    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/albums/default_cover.png';
 
     const genres = toTextArray(payload.genres);
     if (genres !== undefined) out.genres = genres;
