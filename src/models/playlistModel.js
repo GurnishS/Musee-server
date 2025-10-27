@@ -24,13 +24,6 @@ function toDateOnly(v) {
     return d.toISOString().slice(0, 10);
 }
 
-function toInterval(v) {
-    if (v == null || v === '') return null;
-    if (typeof v === 'number' && Number.isFinite(v)) return `${Math.trunc(v)} seconds`;
-    if (typeof v === 'string') return v.trim();
-    return null;
-}
-
 function toTextArray(val) {
     if (val === undefined) return undefined;
     if (Array.isArray(val)) return val.map(String);
@@ -50,7 +43,8 @@ function toUUIDArray(val) {
 
 function sanitizeInsert(payload = {}) {
     const out = {};
-    const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : 'Untitled Playlist';
+    const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null;
+    if (!name) throw new Error('name is required');
     out.name = name;
 
     if (payload.creator_id !== undefined && payload.creator_id !== null) {
@@ -60,7 +54,6 @@ function sanitizeInsert(payload = {}) {
 
     if (payload.is_public !== undefined) out.is_public = Boolean(payload.is_public);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : null;
-    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
 
     const genres = toTextArray(payload.genres);
     if (genres !== undefined) out.genres = genres;
@@ -72,7 +65,7 @@ function sanitizeInsert(payload = {}) {
     const track_ids = toUUIDArray(payload.track_ids);
     if (track_ids !== undefined) out.track_ids = track_ids;
 
-    if (payload.duration !== undefined) out.duration = toInterval(payload.duration);
+    if (payload.duration !== undefined) out.duration = toNum(payload.duration);
 
     out.created_at = new Date().toISOString();
     out.updated_at = new Date().toISOString();
@@ -93,7 +86,6 @@ function sanitizeUpdate(payload = {}) {
     }
     if (payload.is_public !== undefined) out.is_public = Boolean(payload.is_public);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : payload.description;
-    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : payload.cover_url;
 
     const genres = toTextArray(payload.genres);
     if (genres !== undefined) out.genres = genres;
@@ -105,7 +97,7 @@ function sanitizeUpdate(payload = {}) {
     const track_ids = toUUIDArray(payload.track_ids);
     if (track_ids !== undefined) out.track_ids = track_ids;
 
-    if (payload.duration !== undefined) out.duration = toInterval(payload.duration);
+    if (payload.duration !== undefined) out.duration = toNum(payload.duration);
 
     return out;
 }
@@ -146,4 +138,30 @@ async function deletePlaylist(playlist_id) {
     if (error) throw error;
 }
 
-module.exports = { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist };
+async function listPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+    let qb = client().from(table).select('playlist_id, creator_id, cover_url, genres, duration, total_tracks', { count: 'exact' }).eq('is_public', true).order('created_at', { ascending: false });
+    if (q) qb = qb.ilike('name', `%${q}%`);
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    return { items: data, total: count };
+}
+
+async function getPlaylistUser(playlist_id) {
+    const { data, error } = await client().from(table).select('playlist_id, creator_id, cover_url, genres, duration, total_tracks, track_ids').eq('playlist_id', playlist_id).eq('is_public', true).maybeSingle();
+    if (error) throw error;
+
+    tracks = [];
+
+    for (const track_id of data.track_ids) {
+        const { data: trackRow, error: trackErr } = await client().from('tracks').select('*').eq('track_id', track_id).maybeSingle();
+        if (trackErr) throw trackErr;
+        if (trackRow) tracks.push(trackRow);
+    }
+    data.tracks = tracks;
+    return data;
+}
+
+module.exports = { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist, getPlaylistUser, listPlaylistsUser };

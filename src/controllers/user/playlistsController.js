@@ -1,42 +1,16 @@
 const createError = require('http-errors');
-const { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist } = require('../../models/playlistModel');
-const { supabase, supabaseAdmin } = require('../../db/config');
-const mime = require('mime-types');
+const { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist, listPlaylistsUser, getPlaylistUser } = require('../../models/playlistModel');
+const { uploadPlaylistCoverToStorage, deletePlaylistCoverFromStorage } = require('../../utils/supabaseStorage');
 
-const COVERS_BUCKET = process.env.SUPABASE_COVERS_BUCKET || 'covers';
-
-async function uploadCoverToStorage(playlistId, file) {
-    if (!file) return null;
-    const client = supabaseAdmin || supabase;
-    if (!client || !client.storage) return null;
-    const ext = mime.extension(file.mimetype) || 'jpg';
-    const path = `playlists/${playlistId}.${ext}`;
-    try {
-        const { error: upErr } = await client.storage.from(COVERS_BUCKET).upload(path, file.buffer, { contentType: file.mimetype, upsert: true });
-        if (upErr) {
-            console.warn('Supabase storage upload error (playlist cover):', upErr.message || upErr);
-            return null;
-        }
-
-        const publicResp = client.storage.from(COVERS_BUCKET).getPublicUrl(path);
-        const publicData = publicResp?.data || publicResp;
-        const publicUrl = publicData?.publicUrl || publicData?.publicURL;
-        if (publicUrl) return publicUrl;
-
-        if (client === supabaseAdmin && client.storage && typeof client.storage.from === 'function') {
-            try {
-                const { data: signed, error: signErr } = await client.storage.from(COVERS_BUCKET).createSignedUrl(path, 60 * 60);
-                if (!signErr && (signed?.signedURL || signed?.signedUrl)) return signed.signedURL || signed.signedUrl;
-            } catch (e) {
-                // ignore
-            }
-        }
-
-        return `/${path}`;
-    } catch (e) {
-        console.warn('Playlist cover upload failed:', e?.message || e);
-        return null;
+function filterAllowedFields(payload) {
+    // Whitelist fields that users can update about themselves
+    const allowed = new Set(['name', 'description', 'genres', 'is_public', 'track_ids']);
+    const out = {};
+    for (const key of Object.keys(payload || {})) {
+        if (allowed.has(key)) out[key] = payload[key];
     }
+
+    return out;
 }
 
 async function list(req, res) {
@@ -44,22 +18,22 @@ async function list(req, res) {
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;
     const offset = page * limit;
-    const { items, total } = await listPlaylists({ limit, offset, q });
+    const { items, total } = await listPlaylistsUser({ limit, offset, q });
     res.json({ items, total, page, limit });
 }
 
 async function getOne(req, res) {
     const { id } = req.params;
-    const item = await getPlaylist(id);
+    const item = await getPlaylistUser(id);
     if (!item) throw createError(404, 'Playlist not found');
     res.json(item);
 }
 
 async function create(req, res) {
-    const payload = { ...req.body };
+    const payload = filterAllowedFields({ ...req.body });
     const playlist = await createPlaylist(payload);
     if (req.file) {
-        const coverUrl = await uploadCoverToStorage(playlist.playlist_id, req.file);
+        const coverUrl = await uploadPlaylistCoverToStorage(playlist.playlist_id, req.file);
         if (coverUrl) {
             const updated = await updatePlaylist(playlist.playlist_id, { cover_url: coverUrl });
             return res.status(201).json(updated);
@@ -70,9 +44,9 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
-    const payload = { ...req.body };
+    const payload = filterAllowedFields({ ...req.body });
     if (req.file) {
-        const coverUrl = await uploadCoverToStorage(id, req.file);
+        const coverUrl = await uploadPlaylistCoverToStorage(id, req.file);
         if (coverUrl) payload.cover_url = coverUrl;
     }
     const item = await updatePlaylist(id, payload);
@@ -81,6 +55,9 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    const playlist = await getPlaylist(id);
+    if (!playlist) throw createError(404, 'Playlist not found');
+    await deletePlaylistCoverFromStorage(playlist.playlist_id, playlist.cover_url);
     await deletePlaylist(id);
     res.status(204).send();
 }

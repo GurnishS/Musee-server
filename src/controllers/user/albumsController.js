@@ -1,42 +1,16 @@
 const createError = require('http-errors');
-const { listAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum } = require('../../models/albumModel');
-const { supabase, supabaseAdmin } = require('../../db/config');
-const mime = require('mime-types');
+const { listAlbumsUser, getAlbumUser, createAlbum, updateAlbum, deleteAlbum, getAlbum } = require('../../models/albumModel');
+const { uploadAlbumCoverToStorage, deleteAlbumCoverFromStorage } = require('../../utils/supabaseStorage');
 
-const COVERS_BUCKET = process.env.SUPABASE_COVERS_BUCKET || 'covers';
-
-async function uploadCoverToStorage(albumId, file) {
-    if (!file) return null;
-    const client = supabaseAdmin || supabase;
-    if (!client || !client.storage) return null;
-    const ext = mime.extension(file.mimetype) || 'jpg';
-    const path = `albums/${albumId}.${ext}`;
-    try {
-        const { error: upErr } = await client.storage.from(COVERS_BUCKET).upload(path, file.buffer, { contentType: file.mimetype, upsert: true });
-        if (upErr) {
-            console.warn('Supabase storage upload error (album cover):', upErr.message || upErr);
-            return null;
-        }
-
-        const publicResp = client.storage.from(COVERS_BUCKET).getPublicUrl(path);
-        const publicData = publicResp?.data || publicResp;
-        const publicUrl = publicData?.publicUrl || publicData?.publicURL;
-        if (publicUrl) return publicUrl;
-
-        if (client === supabaseAdmin && client.storage && typeof client.storage.from === 'function') {
-            try {
-                const { data: signed, error: signErr } = await client.storage.from(COVERS_BUCKET).createSignedUrl(path, 60 * 60);
-                if (!signErr && (signed?.signedURL || signed?.signedUrl)) return signed.signedURL || signed.signedUrl;
-            } catch (e) {
-                // ignore
-            }
-        }
-
-        return `/${path}`;
-    } catch (e) {
-        console.warn('Album cover upload failed:', e?.message || e);
-        return null;
+function filterAllowedFields(payload) {
+    // Whitelist fields that users can update about themselves
+    const allowed = new Set(['title', 'description', 'genres', 'is_published']);
+    const out = {};
+    for (const key of Object.keys(payload || {})) {
+        if (allowed.has(key)) out[key] = payload[key];
     }
+
+    return out;
 }
 
 async function list(req, res) {
@@ -44,23 +18,24 @@ async function list(req, res) {
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;
     const offset = page * limit;
-    const { items, total } = await listAlbums({ limit, offset, q });
+    const { items, total } = await listAlbumsUser({ limit, offset, q });
     res.json({ items, total, page, limit });
 }
 
 async function getOne(req, res) {
     const { id } = req.params;
-    const item = await getAlbum(id);
+    const item = await getAlbumUser(id);
     if (!item) throw createError(404, 'Album not found');
     res.json(item);
 }
 
 async function create(req, res) {
     // Create first to get album_id, then upload cover if present
-    const payload = { ...req.body };
+    const payload = filterAllowedFields({ ...req.body });
+
     const album = await createAlbum(payload);
     if (req.file) {
-        const coverUrl = await uploadCoverToStorage(album.album_id, req.file);
+        const coverUrl = await uploadAlbumCoverToStorage(album.album_id, req.file);
         if (coverUrl) {
             const updated = await updateAlbum(album.album_id, { cover_url: coverUrl });
             return res.status(201).json(updated);
@@ -71,9 +46,18 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
-    const payload = { ...req.body };
+    const payload = filterAllowedFields({ ...req.body });
+
+    const album = await getAlbum(id);
+
+    if (!album) throw createError(404, 'Album not found');
+
+    if (req.user.user_id != album.artist_id) {
+        throw createError(403, 'Forbidden');
+    }
+
     if (req.file) {
-        const coverUrl = await uploadCoverToStorage(id, req.file);
+        const coverUrl = await uploadAlbumCoverToStorage(id, req.file);
         if (coverUrl) payload.cover_url = coverUrl;
     }
     const item = await updateAlbum(id, payload);
@@ -82,6 +66,17 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+
+    const album = await getAlbum(id);
+
+    if (!album) throw createError(404, 'Album not found');
+
+    if (req.user.user_id != album.artist_id) {
+        throw createError(403, 'Forbidden');
+    }
+
+    await deleteAlbumCoverFromStorage(album.album_id, album.cover_url);
+
     await deleteAlbum(id);
     res.status(204).send();
 }

@@ -155,21 +155,30 @@ async function deleteAlbum(album_id) {
     if (error) throw error;
 }
 
-async function listAlbumsPublic({ limit = 20, offset = 0, q } = {}) {
+async function listAlbumsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
-    let qb = client().from(table).select('*', { count: 'exact'}).eq('is_published', true).order('created_at', { ascending: false });
+    let qb = client().from(table).select('album_id, title, artist_id, cover_url, duration, albums:albums!albums_artist_id_fkey(name, avatar_url)', { count: 'exact' }).eq('is_published', true).order('created_at', { ascending: false });
     if (q) qb = qb.ilike('title', `%${q}%`);
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
     return { items: data, total: count };
 }
 
-async function getAlbumPublic(album_id) {
-    const { data, error } = await client().from(table).select('*').eq('album_id', album_id).eq('is_published', true).maybeSingle();
+async function getAlbumUser(album_id) {
+    const { data, error } = await client().from(table).select('album_id, title, artist_id, cover_url, release_date, duration, albums:albums!albums_artist_id_fkey(name, avatar_url)').eq('album_id', album_id).eq('is_published', true).maybeSingle();
     if (error) throw error;
+
+    //fetch tracks with this album_id
+
+    const tracks = await client().from('tracks').select('track_id, title, artist_ids, cover_url, duration, is_explicit').eq('album_id', album_id).eq('is_published', true).order('created_at', { ascending: false });
+
+    if (!tracks) return null;
+
+    data.tracks = tracks;
+
     return data;
 }
 
-module.exports = { listAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum, listAlbumsPublic, getAlbumPublic };
+module.exports = { listAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum, listAlbumsUser, getAlbumUser };

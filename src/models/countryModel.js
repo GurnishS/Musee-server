@@ -15,7 +15,7 @@ function sanitizeInsert(payload = {}) {
     const code = typeof payload.code === 'string' ? payload.code.trim() : '';
     const name = typeof payload.name === 'string' ? payload.name.trim() : '';
     if (!code) throw new Error('code is required');
-    if(code.length!=2) throw new Error('code must of len 2');
+    if (code.length != 2) throw new Error('code must of len 2');
     if (!name) throw new Error('name is required');
     out.code = code;
     out.name = name;
@@ -28,7 +28,7 @@ function sanitizeUpdate(payload = {}) {
     if (payload.code !== undefined) {
         const code = typeof payload.code === 'string' ? payload.code.trim() : '';
         if (!code) throw new Error('code cannot be empty');
-        if(code.length!=2) throw new Error('code must of len 2');
+        if (code.length != 2) throw new Error('code must of len 2');
         out.code = code;
     }
     if (payload.name !== undefined) {
@@ -75,4 +75,22 @@ async function deleteCountry(country_id) {
     if (error) throw error;
 }
 
-module.exports = { listCountries, getCountry, createCountry, updateCountry, deleteCountry };
+// user functions
+async function listCountriesUser({ limit = 20, offset = 0, q } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+    let qb = client().from(table).select('country_id, code, name', { count: 'exact' }).order('code', { ascending: true });
+    if (q) qb = qb.or(`code.ilike.%${q}%,name.ilike.%${q}%`);
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    return { items: data, total: count };
+}
+
+async function getCountryUser(country_id) {
+    const { data, error } = await client().from(table).select('country_id, code, name').eq('country_id', country_id).maybeSingle();
+    if (error) throw error;
+    return data;
+}
+
+module.exports = { listCountries, getCountry, createCountry, updateCountry, deleteCountry, listCountriesUser, getCountryUser };

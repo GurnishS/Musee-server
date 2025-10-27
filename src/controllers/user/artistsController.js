@@ -2,12 +2,12 @@ const createError = require('http-errors');
 const mime = require('mime-types');
 const { supabase, supabaseAdmin } = require('../../db/config');
 const {
-    listArtistsPublic,
-    getArtistPublic,
     getArtist,
     createArtist,
     updateArtist,
     deleteArtist,
+    listArtistsUser,
+    getArtistUser,
 } = require('../../models/artistModel');
 const { updateUser } = require('../../models/userModel');
 const { uploadArtistCoverToStorage } = require('../../utils/supabaseStorage');
@@ -49,9 +49,6 @@ function sanitizeArtistCreateInput(body = {}) {
         out.is_verified = body.is_verified === true || body.is_verified === 'true';
     }
 
-    // monthly_listeners: default 0
-    out.monthly_listeners = Math.max(0, Math.trunc(toNum(body.monthly_listeners, 0)) || 0);
-
     // region_id: required UUID
     if (!isUUID(body.region_id)) throw createError(400, 'region_id (UUID) is required');
     out.region_id = body.region_id;
@@ -91,7 +88,6 @@ function sanitizeArtistUpdateInput(body = {}) {
         out.debut_year = v;
     }
     if (body.is_verified !== undefined) out.is_verified = body.is_verified === true || body.is_verified === 'true';
-    if (body.monthly_listeners !== undefined) out.monthly_listeners = Math.max(0, Math.trunc(toNum(body.monthly_listeners, 0)));
     if (body.region_id !== undefined) {
         if (body.region_id !== null && !isUUID(body.region_id)) throw createError(400, 'region_id must be a UUID or null');
         out.region_id = body.region_id;
@@ -114,14 +110,14 @@ async function list(req, res) {
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;
     const offset = page * limit;
-    const { items, total } = await listArtistsPublic({ limit, offset, q });
+    const { items, total } = await listArtistsUser({ limit, offset, q });
     res.json({ items, total, page, limit });
 }
 
 // GET /api/user/artists/:id
 async function getOne(req, res) {
     const { id } = req.params;
-    const item = await getArtistPublic(id);
+    const item = await getArtistUser(id);
     if (!item) throw createError(404, 'Artist not found');
     res.json(item);
 }

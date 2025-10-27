@@ -142,7 +142,7 @@ async function deleteArtist(artist_id) {
 }
 
 //public functions
-async function listArtistsPublic({ limit = 20, offset = 0, q } = {}) {
+async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
@@ -182,7 +182,7 @@ async function listArtistsPublic({ limit = 20, offset = 0, q } = {}) {
     return { items, total: count };
 }
 
-async function getArtistPublic(artist_id) {
+async function getArtistUser(artist_id) {
     const { data, error } = await client()
         .from(table)
         .select(
@@ -206,4 +206,4 @@ async function getArtistPublic(artist_id) {
     };
 }
 
-module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, listArtistsPublic, getArtistPublic };
+module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, listArtistsUser, getArtistUser };

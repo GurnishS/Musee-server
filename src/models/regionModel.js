@@ -88,4 +88,23 @@ async function deleteRegion(region_id) {
     if (error) throw error;
 }
 
-module.exports = { listRegions, getRegion, createRegion, updateRegion, deleteRegion };
+//user functions
+async function listRegionsUser({ limit = 20, offset = 0, q, country_id } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+    let qb = client().from(table).select('region_id, country_id, code, name', { count: 'exact' }).order('code', { ascending: true });
+    if (q) qb = qb.or(`code.ilike.%${q}%,name.ilike.%${q}%`);
+    if (country_id) qb = qb.eq('country_id', country_id);
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    return { items: data, total: count };
+}
+
+async function getRegionUser(region_id) {
+    const { data, error } = await client().from(table).select('region_id, country_id, code, name').eq('region_id', region_id).maybeSingle();
+    if (error) throw error;
+    return data;
+}
+
+module.exports = { listRegions, getRegion, createRegion, updateRegion, deleteRegion ,listRegionsUser, getRegionUser};
