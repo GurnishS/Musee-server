@@ -32,7 +32,7 @@ async function listPlaylistTracks(playlist_id) {
         .from(table)
         .select(`
             id,
-            tracks:tracks!playlist_tracks_track_id_fkey(track_id, title, cover_url, duration, created_at)
+            tracks:tracks!playlist_tracks_track_id_fkey(track_id, title, duration, created_at)
         `)
         .eq('playlist_id', playlist_id);
     if (error) throw error;

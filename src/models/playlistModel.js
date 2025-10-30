@@ -107,7 +107,7 @@ async function getPlaylist(playlist_id) {
             playlist_id, name, creator_id, is_public, description, cover_url, genres, likes_count, total_tracks, duration, created_at, updated_at,
             playlist_tracks:playlist_tracks!playlist_tracks_playlist_id_fkey(
                 tracks:tracks!playlist_tracks_track_id_fkey(
-                    track_id, title, cover_url, duration, created_at
+                    track_id, title, duration, created_at
                 )
             )
         `)
@@ -157,7 +157,7 @@ async function getPlaylistUser(playlist_id) {
             playlist_id, name, creator_id, cover_url, genres, duration, total_tracks,
             playlist_tracks:playlist_tracks!playlist_tracks_playlist_id_fkey(
                 tracks:tracks!playlist_tracks_track_id_fkey(
-                    track_id, title, cover_url, duration, created_at
+                    track_id, title, duration, created_at
                 )
             )
         `)

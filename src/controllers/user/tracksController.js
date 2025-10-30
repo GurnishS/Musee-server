@@ -4,8 +4,7 @@ const { listTracks, getTrack, createTrack, updateTrack, deleteTrack, listTracksU
 const { getAlbum } = require('../../models/albumModel');
 const { addTrackArtist } = require('../../models/trackArtistsModel');
 const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudiosModel');
-const { uploadTrackCoverToStorage, uploadTrackVideoToStorage, deleteTrackVideoFromStorage, deleteTrackCoverFromStorage } = require('../../utils/supabaseStorage');
-const { fi } = require('zod/locales');
+const { uploadTrackVideoToStorage, deleteTrackVideoFromStorage } = require('../../utils/supabaseStorage');
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can set on tracks
@@ -56,9 +55,8 @@ async function create(req, res) {
 
     // Validate required files
     const audioFileRequired = getFileFromReq(req, 'audio');
-    const coverFileRequired = getFileFromReq(req, 'cover');
-    if (!audioFileRequired || !coverFileRequired) {
-        return res.status(400).json({ error: 'audio and cover files are required' });
+    if (!audioFileRequired) {
+        return res.status(400).json({ error: 'audio file is required' });
     }
 
     // initially create track without audio and is_published=false
@@ -80,24 +78,19 @@ async function create(req, res) {
                 const ext = extPart.toLowerCase();
                 await addTrackAudio(created.track_id, ext, bitrate, url);
             }
-            // link creator as owner artist on the track for future authorization
-            try { await addTrackArtist(created.track_id, userId, 'owner'); } catch (e) { /* ignore duplicate*/ }
+            // link all album owners as owners on this track
+            try {
+                const owners = (album.artists || []).filter(a => a.role === 'owner');
+                for (const o of owners) {
+                    try { await addTrackArtist(created.track_id, o.artist_id, 'owner'); } catch (_) { /* ignore duplicate*/ }
+                }
+            } catch (_) { /* ignore */ }
             result = await updateTrack(created.track_id, { is_published: true });
         } catch (e) {
             console.error('Audio processing failed after track creation:', e?.message || e);
             // return created record but indicate processing failed
             return res.status(500).json({ error: 'Audio processing failed', track: created });
         }
-    }
-
-    // if cover image present, upload it
-    const cover = coverFileRequired;
-    if (cover) {
-        const coverUrl = await uploadTrackCoverToStorage(created.track_id, cover);
-        if (!coverUrl) {
-            return res.status(500).json({ error: 'Cover upload failed', track_id: created.track_id });
-        }
-        result = await updateTrack(created.track_id, { cover_url: coverUrl });
     }
 
     // if video is present, upload it
@@ -149,15 +142,6 @@ async function update(req, res) {
         }
     }
 
-    // if cover image present, upload it
-    const cover = getFileFromReq(req, 'cover');
-    if (cover) {
-        const coverUrl = await uploadTrackCoverToStorage(id, cover);
-        if (coverUrl) {
-            result = await updateTrack(id, { cover_url: coverUrl });
-        }
-    }
-
     // if video is present, upload it
     const video = getFileFromReq(req, 'video');
     if (video) {
@@ -182,7 +166,6 @@ async function remove(req, res) {
     const isOwner = (album.artists || []).some(a => a.artist_id === userId && a.role === 'owner');
     if (!isOwner) throw createError(403, 'Forbidden');
     await deleteTrackVideoFromStorage(track.track_id, track.video_url)
-    await deleteTrackCoverFromStorage(track.track_id, track.cover_url)
     // delete audio DB rows
     await deleteAudiosForTrack(id);
     await deleteTrack(id);

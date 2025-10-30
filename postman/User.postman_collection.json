@@ -562,11 +562,6 @@
                                     "key": "audio",
                                     "type": "file",
                                     "src": []
-                                },
-                                {
-                                    "key": "cover",
-                                    "type": "file",
-                                    "src": []
                                 }
                             ]
                         },

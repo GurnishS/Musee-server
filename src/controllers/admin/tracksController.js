@@ -5,7 +5,9 @@ const { supabase, supabaseAdmin } = require('../../db/config');
 const { processAudioBuffer } = require('../../utils/processAudio');
 const { listTracks, getTrack, createTrack, updateTrack, deleteTrack } = require('../../models/trackModel');
 const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudiosModel');
-const { uploadTrackCoverToStorage, uploadTrackVideoToStorage, deleteTrackVideoFromStorage, deleteTrackCoverFromStorage } = require('../../utils/supabaseStorage');
+const { addTrackArtist } = require('../../models/trackArtistsModel');
+const { getAlbum } = require('../../models/albumModel');
+const { uploadTrackVideoToStorage, deleteTrackVideoFromStorage } = require('../../utils/supabaseStorage');
 
 function getFileFromReq(req, field) {
     if (!req.files) return null;
@@ -36,9 +38,13 @@ async function create(req, res) {
 
     // Validate required files
     const audioFileRequired = getFileFromReq(req, 'audio');
-    const coverFileRequired = getFileFromReq(req, 'cover');
-    if (!audioFileRequired || !coverFileRequired) {
-        return res.status(400).json({ error: 'audio and cover files are required' });
+    if (!audioFileRequired) {
+        return res.status(400).json({ error: 'audio file is required' });
+    }
+
+    // Validate mandatory album association
+    if (!body.album_id) {
+        return res.status(400).json({ error: 'album_id is required for all tracks' });
     }
 
     // initially create track without audio and is_published=false
@@ -47,6 +53,33 @@ async function create(req, res) {
     const created = await createTrack(body);
 
     result = created;
+
+    // Auto-link album owners as track owners
+    try {
+        const album = await getAlbum(body.album_id);
+        const owners = (album?.artists || []).filter(a => a.role === 'owner');
+        for (const o of owners) {
+            try { await addTrackArtist(created.track_id, o.artist_id, 'owner'); } catch (_) { /* ignore duplicates or errors */ }
+        }
+    } catch (_) { /* ignore album lookup issues for artist linking */ }
+
+    // Optionally accept extra artists from payload: artists=[{artist_id, role}]
+    const rawArtists = req.body?.artists;
+    if (rawArtists) {
+        let extras = [];
+        if (typeof rawArtists === 'string') {
+            try { extras = JSON.parse(rawArtists); } catch (_) { extras = []; }
+        } else if (Array.isArray(rawArtists)) {
+            extras = rawArtists;
+        }
+        for (const a of extras) {
+            const artist_id = a?.artist_id;
+            const role = (a?.role || 'viewer').toString();
+            if (artist_id) {
+                try { await addTrackArtist(created.track_id, artist_id, role); } catch (_) { /* ignore duplicates or invalid */ }
+            }
+        }
+    }
 
     // if audio file present, process it now using the canonical created.track_id
     const audioFile = audioFileRequired;
@@ -68,16 +101,6 @@ async function create(req, res) {
             // return created record but indicate processing failed
             return res.status(500).json({ error: 'Audio processing failed', track: created });
         }
-    }
-
-    // if cover image present, upload it
-    const cover = coverFileRequired;
-    if (cover) {
-        const coverUrl = await uploadTrackCoverToStorage(created.track_id, cover);
-        if (!coverUrl) {
-            return res.status(500).json({ error: 'Cover upload failed', track_id: created.track_id });
-        }
-        result = await updateTrack(created.track_id, { cover_url: coverUrl });
     }
 
     // if video is present, upload it
@@ -123,15 +146,6 @@ async function update(req, res) {
         }
     }
 
-    // if cover image present, upload it
-    const cover = getFileFromReq(req, 'cover');
-    if (cover) {
-        const coverUrl = await uploadTrackCoverToStorage(id, cover);
-        if (coverUrl) {
-            result = await updateTrack(id, { cover_url: coverUrl });
-        }
-    }
-
     // if video is present, upload it
     const video = getFileFromReq(req, 'video');
     if (video) {
@@ -149,7 +163,6 @@ async function remove(req, res) {
     const track = await getTrack(id);
     if (!track) throw createError(404, 'Track not found');
     await deleteTrackVideoFromStorage(track.track_id, track.video_url)
-    await deleteTrackCoverFromStorage(track.track_id, track.cover_url)
     // delete audio DB rows; blob deletion is managed by storage lifecycle if any
     await deleteAudiosForTrack(id);
     await deleteTrack(id);

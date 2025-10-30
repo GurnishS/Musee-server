@@ -709,12 +709,12 @@
                                     "type": "text"
                                 },
                                 {
-                                    "key": "audio",
-                                    "type": "file",
-                                    "src": []
+                                    "key": "artists",
+                                    "value": "[{\n  \"artist_id\": \"<artist_id>\",\n  \"role\": \"editor\"\n}]",
+                                    "type": "text"
                                 },
                                 {
-                                    "key": "cover",
+                                    "key": "audio",
                                     "type": "file",
                                     "src": []
                                 },

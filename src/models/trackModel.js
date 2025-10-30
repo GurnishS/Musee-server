@@ -22,8 +22,6 @@ function sanitizeInsert(payload = {}) {
     if (!isUUID(payload.album_id)) throw new Error('album_id (UUID) is required');
     out.album_id = payload.album_id;
 
-    out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/tracks/default_cover.png';
-
     out.video_url = typeof payload.video_url === 'string' && payload.video_url.trim() ? payload.video_url.trim() : null;
 
     out.lyrics_url = typeof payload.lyrics_url === 'string' && payload.lyrics_url.trim() ? payload.lyrics_url.trim() : null;
@@ -57,11 +55,10 @@ function sanitizeUpdate(payload = {}) {
         out.title = title;
     }
     if (payload.album_id !== undefined) {
-        if (payload.album_id !== null && !isUUID(payload.album_id)) throw new Error('album_id must be a UUID or null');
+        if (!isUUID(payload.album_id)) throw new Error('album_id must be a valid UUID');
         out.album_id = payload.album_id;
     }
     if (payload.lyrics_url !== undefined) out.lyrics_url = typeof payload.lyrics_url === 'string' ? payload.lyrics_url.trim() : null;
-    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
     if (payload.video_url !== undefined) out.video_url = typeof payload.video_url === 'string' ? payload.video_url.trim() : null;
     if (payload.duration !== undefined) {
         const d = toNum(payload.duration, null);
@@ -86,7 +83,7 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, album_id, cover_url, lyrics_url, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published,
+            track_id, title, album_id, lyrics_url, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published,
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -117,7 +114,6 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
         track_id: row.track_id,
         title: row.title,
         album_id: row.album_id,
-        cover_url: row.cover_url,
         lyrics_url: row.lyrics_url,
         duration: row.duration,
         play_count: row.play_count,
@@ -143,7 +139,7 @@ async function getTrack(track_id) {
     const { data, error } = await client()
         .from(table)
         .select(`
-            track_id, title, album_id, cover_url, lyrics_url, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published,
+            track_id, title, album_id, lyrics_url, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published,
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -163,7 +159,6 @@ async function getTrack(track_id) {
         track_id: data.track_id,
         title: data.title,
         album_id: data.album_id,
-        cover_url: data.cover_url,
         lyrics_url: data.lyrics_url,
         duration: data.duration,
         play_count: data.play_count,
@@ -219,7 +214,7 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, cover_url, duration, created_at,
+            track_id, title, duration, created_at,
             track_artists:track_artists!track_artists_track_id_fkey(
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
@@ -236,7 +231,6 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
     const items = (data || []).map(row => ({
         track_id: row.track_id,
         title: row.title,
-        cover_url: row.cover_url,
         duration: row.duration,
         created_at: row.created_at,
         artists: (row.track_artists || []).map(ta => ({
@@ -252,7 +246,7 @@ async function getTrackUser(track_id) {
     const { data, error } = await client()
         .from(table)
         .select(`
-            track_id, title, cover_url, album_id, duration, play_count, is_explicit, likes_count, created_at,
+            track_id, title, album_id, duration, play_count, is_explicit, likes_count, created_at,
             track_artists:track_artists!track_artists_track_id_fkey(
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
@@ -271,7 +265,6 @@ async function getTrackUser(track_id) {
     return {
         track_id: data.track_id,
         title: data.title,
-        cover_url: data.cover_url,
         album_id: data.album_id,
         duration: data.duration,
         play_count: data.play_count,

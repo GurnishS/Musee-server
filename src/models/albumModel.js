@@ -122,7 +122,7 @@ async function getAlbum(album_id) {
     const { data: tracksData, error: tracksError } = await client()
         .from('tracks')
         .select(`
-            track_id, title, cover_url, duration, is_explicit, is_published, created_at,
+            track_id, title, duration, is_explicit, is_published, created_at,
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -145,7 +145,6 @@ async function getAlbum(album_id) {
     const tracks = (tracksData || []).map(t => ({
         track_id: t.track_id,
         title: t.title,
-        cover_url: t.cover_url,
         duration: t.duration,
         is_explicit: t.is_explicit,
         is_published: t.is_published,
@@ -255,7 +254,7 @@ async function getAlbumUser(album_id) {
     const { data: tracksData, error: tracksError } = await client()
         .from('tracks')
         .select(`
-            track_id, title, cover_url, duration, is_explicit, created_at,
+            track_id, title, duration, is_explicit, created_at,
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -285,7 +284,6 @@ async function getAlbumUser(album_id) {
         tracks: (tracksData || []).map(t => ({
             track_id: t.track_id,
             title: t.title,
-            cover_url: t.cover_url,
             duration: t.duration,
             is_explicit: t.is_explicit,
             created_at: t.created_at,
