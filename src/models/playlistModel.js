@@ -17,12 +17,7 @@ function toNum(v, def) {
     return Number.isFinite(n) ? n : def;
 }
 
-function toDateOnly(v) {
-    if (!v) return null;
-    const d = v instanceof Date ? v : new Date(v);
-    if (isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 10);
-}
+// no dates to coerce here
 
 function toTextArray(val) {
     if (val === undefined) return undefined;
@@ -35,11 +30,7 @@ function toTextArray(val) {
     return [];
 }
 
-function toUUIDArray(val) {
-    if (val === undefined) return undefined;
-    const arr = Array.isArray(val) ? val : (typeof val === 'string' ? (val.trim() ? (val.includes(',') ? val.split(',') : [val]) : []) : []);
-    return arr.map(s => String(s).trim()).filter(isUUID);
-}
+// normalized schema uses playlist_tracks; no track_ids array on playlists
 
 function sanitizeInsert(payload = {}) {
     const out = {};
@@ -62,10 +53,6 @@ function sanitizeInsert(payload = {}) {
 
     out.likes_count = Math.max(0, Math.trunc(toNum(payload.likes_count, 0)));
     out.total_tracks = Math.max(0, Math.trunc(toNum(payload.total_tracks, 0)));
-    out.play_count = Math.max(0, Math.trunc(toNum(payload.play_count, 0)));
-
-    const track_ids = toUUIDArray(payload.track_ids);
-    if (track_ids !== undefined) out.track_ids = track_ids;
 
     if (payload.duration !== undefined) out.duration = toNum(payload.duration);
 
@@ -92,14 +79,10 @@ function sanitizeUpdate(payload = {}) {
     const genres = toTextArray(payload.genres);
     if (genres !== undefined) out.genres = genres;
 
-    out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/playlists/default_cover.png';
+    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
 
     if (payload.likes_count !== undefined) out.likes_count = Math.max(0, Math.trunc(toNum(payload.likes_count, 0)));
     if (payload.total_tracks !== undefined) out.total_tracks = Math.max(0, Math.trunc(toNum(payload.total_tracks, 0)));
-    if (payload.play_count !== undefined) out.play_count = Math.max(0, Math.trunc(toNum(payload.play_count, 0)));
-
-    const track_ids = toUUIDArray(payload.track_ids);
-    if (track_ids !== undefined) out.track_ids = track_ids;
 
     if (payload.duration !== undefined) out.duration = toNum(payload.duration);
 
@@ -118,9 +101,23 @@ async function listPlaylists({ limit = 20, offset = 0, q } = {}) {
 }
 
 async function getPlaylist(playlist_id) {
-    const { data, error } = await client().from(table).select('*').eq('playlist_id', playlist_id).maybeSingle();
+    const { data, error } = await client()
+        .from(table)
+        .select(`
+            playlist_id, name, creator_id, is_public, description, cover_url, genres, likes_count, total_tracks, duration, created_at, updated_at,
+            playlist_tracks:playlist_tracks!playlist_tracks_playlist_id_fkey(
+                tracks:tracks!playlist_tracks_track_id_fkey(
+                    track_id, title, cover_url, duration, created_at
+                )
+            )
+        `)
+        .eq('playlist_id', playlist_id)
+        .maybeSingle();
     if (error) throw error;
-    return data;
+    if (!data) return null;
+    const tracks = (data.playlist_tracks || []).map(pt => pt?.tracks).filter(Boolean);
+    const { playlist_tracks, ...rest } = data;
+    return { ...rest, tracks };
 }
 
 async function createPlaylist(payload) {
@@ -146,7 +143,7 @@ async function listPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
-    let qb = client().from(table).select('playlist_id, creator_id, cover_url, genres, duration, total_tracks', { count: 'exact' }).eq('is_public', true).order('created_at', { ascending: false });
+    let qb = client().from(table).select('playlist_id, name, creator_id, cover_url, genres, duration, total_tracks', { count: 'exact' }).eq('is_public', true).order('created_at', { ascending: false });
     if (q) qb = qb.ilike('name', `%${q}%`);
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
@@ -154,18 +151,24 @@ async function listPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
 }
 
 async function getPlaylistUser(playlist_id) {
-    const { data, error } = await client().from(table).select('playlist_id, creator_id, cover_url, genres, duration, total_tracks, track_ids').eq('playlist_id', playlist_id).eq('is_public', true).maybeSingle();
+    const { data, error } = await client()
+        .from(table)
+        .select(`
+            playlist_id, name, creator_id, cover_url, genres, duration, total_tracks,
+            playlist_tracks:playlist_tracks!playlist_tracks_playlist_id_fkey(
+                tracks:tracks!playlist_tracks_track_id_fkey(
+                    track_id, title, cover_url, duration, created_at
+                )
+            )
+        `)
+        .eq('playlist_id', playlist_id)
+        .eq('is_public', true)
+        .maybeSingle();
     if (error) throw error;
-
-    tracks = [];
-
-    for (const track_id of data.track_ids) {
-        const { data: trackRow, error: trackErr } = await client().from('tracks').select('*').eq('track_id', track_id).maybeSingle();
-        if (trackErr) throw trackErr;
-        if (trackRow) tracks.push(trackRow);
-    }
-    data.tracks = tracks;
-    return data;
+    if (!data) return null;
+    const tracks = (data.playlist_tracks || []).map(pt => pt?.tracks).filter(Boolean);
+    const { playlist_tracks, ...rest } = data;
+    return { ...rest, tracks };
 }
 
 module.exports = { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist, getPlaylistUser, listPlaylistsUser };

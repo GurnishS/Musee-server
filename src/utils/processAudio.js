@@ -52,11 +52,15 @@ async function uploadToBlob(localPath, blobName) {
     }
 
     const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-    const mimeType = mime.lookup(localPath) || 'application/octet-stream';
+    const ext = path.extname(localPath).toLowerCase();
+    let mimeType = mime.lookup(localPath) || 'application/octet-stream';
+    if (ext === '.m3u8') mimeType = 'application/vnd.apple.mpegurl';
+    else if (ext === '.ts') mimeType = 'video/mp2t';
     await blockBlobClient.uploadFile(localPath, {
         blobHTTPHeaders: { blobContentType: mimeType },
     });
-    return blockBlobClient.url;
+    // Return blob path (name) instead of absolute URL. We'll sign it when serving.
+    return blockBlobClient.name;
 }
 
 function getAudioFileFromReq(req) {
@@ -100,8 +104,8 @@ async function processAudioBuffer(audioFile, trackId) {
     const mp3Local = path.join(tmpDir, mp3Filename);
     await convertToMp3(infile, mp3Local, bitrate);
     const mp3Blob = `audio/${mp3Filename}`;
-    const mp3Url = await uploadToBlob(mp3Local, mp3Blob);
-    generated[`${bitrate}k_mp3`] = mp3Url;
+    const mp3Path = await uploadToBlob(mp3Local, mp3Blob);
+    generated[`${bitrate}k_mp3`] = mp3Path;
 
     // create ogg variants up to original bitrate
     for (const kb of variants) {
@@ -111,10 +115,74 @@ async function processAudioBuffer(audioFile, trackId) {
             const oggLocal = path.join(tmpDir, oggFilename);
             await convertToOgg(infile, oggLocal, kb);
             const oggBlob = `audio/${oggFilename}`;
-            const oggUrl = await uploadToBlob(oggLocal, oggBlob);
-            generated[`${kb}k_ogg`] = oggUrl;
+            const oggPath = await uploadToBlob(oggLocal, oggBlob);
+            generated[`${kb}k_ogg`] = oggPath;
         }
     }
+
+    // Generate HLS variants and master playlist
+    const hlsRootDir = path.join(tmpDir, `hls_${trackId}_${uuidv4()}`);
+    fs.mkdirSync(hlsRootDir, { recursive: true });
+
+    async function generateHlsVariant(kb) {
+        const vDir = path.join(hlsRootDir, `v${kb}`);
+        fs.mkdirSync(vDir, { recursive: true });
+        const segPattern = path.join(vDir, 'seg_%05d.ts');
+        const playlistPath = path.join(vDir, 'index.m3u8');
+        await new Promise((resolve, reject) => {
+            ffmpeg(infile)
+                .noVideo()
+                .audioCodec('aac')
+                .audioBitrate(`${kb}k`)
+                .format('hls')
+                .outputOptions([
+                    '-hls_time 4',
+                    '-hls_playlist_type vod',
+                    `-hls_segment_filename ${segPattern.replace(/\\/g, '/')}`,
+                ])
+                .output(playlistPath)
+                .on('end', resolve)
+                .on('error', reject)
+                .run();
+        });
+    }
+
+    for (const kb of variants) {
+        await generateHlsVariant(kb);
+    }
+
+    // Write master.m3u8
+    const masterPath = path.join(hlsRootDir, 'master.m3u8');
+    const masterContent = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        '#EXT-X-INDEPENDENT-SEGMENTS',
+        '#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="mp4a.40.2"',
+        'v96/index.m3u8',
+        '#EXT-X-STREAM-INF:BANDWIDTH=192000,CODECS="mp4a.40.2"',
+        'v160/index.m3u8',
+        '#EXT-X-STREAM-INF:BANDWIDTH=384000,CODECS="mp4a.40.2"',
+        'v320/index.m3u8',
+        ''
+    ].join('\n');
+    fs.writeFileSync(masterPath, masterContent, 'utf8');
+
+    // Upload HLS tree under hls/track_<trackId>/
+    async function uploadDir(localDir, baseBlobPrefix) {
+        const entries = fs.readdirSync(localDir, { withFileTypes: true });
+        for (const ent of entries) {
+            const local = path.join(localDir, ent.name);
+            const rel = path.relative(hlsRootDir, local).replace(/\\/g, '/');
+            const blobName = `${baseBlobPrefix}/${rel}`;
+            if (ent.isDirectory()) {
+                await uploadDir(local, baseBlobPrefix);
+            } else {
+                await uploadToBlob(local, blobName);
+            }
+        }
+    }
+    const hlsPrefix = `hls/track_${trackId}`;
+    await uploadDir(hlsRootDir, hlsPrefix);
 
     // cleanup temp files
     try { fs.unlinkSync(infile); } catch (e) { }
@@ -124,7 +192,7 @@ async function processAudioBuffer(audioFile, trackId) {
         try { if (fs.existsSync(local)) fs.unlinkSync(local); } catch (e) { }
     });
 
-    return { bitrate, files: generated };
+    return { bitrate, files: generated, hls: { master: `${hlsPrefix}/master.m3u8` } };
 }
 
 module.exports = { processAudioBuffer };

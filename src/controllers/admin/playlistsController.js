@@ -1,5 +1,6 @@
 const createError = require('http-errors');
 const { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist } = require('../../models/playlistModel');
+const { addPlaylistTrack, removePlaylistTrack } = require('../../models/playlistTracksModel');
 const { uploadPlaylistCoverToStorage, deletePlaylistCoverFromStorage } = require('../../utils/supabaseStorage');
 
 async function list(req, res) {
@@ -52,3 +53,23 @@ async function remove(req, res) {
 }
 
 module.exports = { list, getOne, create, update, remove };
+
+// Add a track to a playlist (admin)
+async function addTrack(req, res) {
+    const { id } = req.params; // playlist_id
+    const { track_id } = req.body;
+    if (!track_id) return res.status(400).json({ error: 'track_id is required' });
+    await addPlaylistTrack(id, track_id);
+    const updated = await getPlaylist(id);
+    res.status(200).json(updated);
+}
+
+// Remove a track from a playlist (admin)
+async function removeTrack(req, res) {
+    const { id, trackId } = req.params; // playlist_id and trackId
+    await removePlaylistTrack(id, trackId);
+    res.status(204).send();
+}
+
+module.exports.addTrack = addTrack;
+module.exports.removeTrack = removeTrack;

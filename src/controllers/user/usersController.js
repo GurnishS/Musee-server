@@ -1,10 +1,21 @@
 const createError = require('http-errors');
 const { listUsersPublic, getUserPublic, getUser, updateUser, deleteUser } = require('../../models/userModel');
-const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage} = require('../../utils/supabaseStorage');
+const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage } = require('../../utils/supabaseStorage');
+
+function filterAllowedFields(payload) {
+    // Whitelist fields that users can update about themselves
+    const allowed = new Set(['name', 'settings', 'playlists']);
+    const out = {};
+    for (const key of Object.keys(payload || {})) {
+        if (allowed.has(key)) out[key] = payload[key];
+        else throw createError(403, 'invalid field ' + key);
+    }
+    return out;
+}
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
-    const page = Math.max(0, Number(req.query.page) || 0);
+    const page = Math.max(0, Number(req.query.page) || 0); // zero-based
     const q = req.query.q || undefined;
     const offset = page * limit;
     const { items, total } = await listUsersPublic({ limit, offset, q });
@@ -30,20 +41,17 @@ async function update(req, res) {
         return res.status(403).json({ message: 'Forbidden' });
     }
 
-    // Whitelist fields that users can update about themselves
-    const allowed = new Set(['name', 'settings', 'playlists']);
-    const payload = {};
-    for (const key of Object.keys(req.body || {})) {
-        if (allowed.has(key)) payload[key] = req.body[key];
-    }
+    const body = filterAllowedFields({ ...req.body });
+
+    const item = await updateUser(id, body);
 
     // Handle avatar upload separately
     if (req.file) {
         const avatarPath = await uploadUserAvatarToStorage(id, req.file);
-        if (avatarPath) payload.avatar_url = avatarPath;
+        if (avatarPath) item.avatar_url = avatarPath;
+        await updateUser(id, { avatar_url: avatarPath });
     }
 
-    const item = await updateUser(id, payload);
     res.json(item);
 }
 

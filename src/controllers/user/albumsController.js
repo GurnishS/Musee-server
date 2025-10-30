@@ -1,5 +1,8 @@
 const createError = require('http-errors');
 const { listAlbumsUser, getAlbumUser, createAlbum, updateAlbum, deleteAlbum, getAlbum } = require('../../models/albumModel');
+const { createAlbumArtist, updateAlbumArtistByPair, deleteAlbumArtistByPair } = require('../../models/albumArtistsModel');
+const { getArtist } = require('../../models/artistModel');
+const { isUUID, validateArtistRoles } = require('../../utils/validators');
 const { uploadAlbumCoverToStorage, deleteAlbumCoverFromStorage } = require('../../utils/supabaseStorage');
 
 function filterAllowedFields(payload) {
@@ -8,6 +11,7 @@ function filterAllowedFields(payload) {
     const out = {};
     for (const key of Object.keys(payload || {})) {
         if (allowed.has(key)) out[key] = payload[key];
+        else throw createError(403, 'invalid field ' + key);
     }
 
     return out;
@@ -32,16 +36,24 @@ async function getOne(req, res) {
 async function create(req, res) {
     // Create first to get album_id, then upload cover if present
     const payload = filterAllowedFields({ ...req.body });
+    // Only allow artists to create albums; verify user has an artist profile
+    const artist = await getArtist(req.user.id);
+    if (!artist) throw createError(403, 'Only artists can create albums');
 
     const album = await createAlbum(payload);
+    // Link the creating artist as owner of the album
+    await createAlbumArtist(album.album_id, req.user.id, 'owner');
     if (req.file) {
         const coverUrl = await uploadAlbumCoverToStorage(album.album_id, req.file);
         if (coverUrl) {
             const updated = await updateAlbum(album.album_id, { cover_url: coverUrl });
-            return res.status(201).json(updated);
+            // Return with joined data
+            const enriched = await getAlbum(updated.album_id);
+            return res.status(201).json(enriched || updated);
         }
     }
-    res.status(201).json(album);
+    const enriched = await getAlbum(album.album_id);
+    res.status(201).json(enriched || album);
 }
 
 async function update(req, res) {
@@ -49,31 +61,28 @@ async function update(req, res) {
     const payload = filterAllowedFields({ ...req.body });
 
     const album = await getAlbum(id);
-
     if (!album) throw createError(404, 'Album not found');
 
-    if (req.user.user_id != album.artist_id) {
-        throw createError(403, 'Forbidden');
-    }
+    const userIsOwner = (album.artists || []).some(a => a.artist_id === req.user.id && a.role === 'owner');
+    if (!userIsOwner) throw createError(403, 'Forbidden');
 
     if (req.file) {
         const coverUrl = await uploadAlbumCoverToStorage(id, req.file);
         if (coverUrl) payload.cover_url = coverUrl;
     }
     const item = await updateAlbum(id, payload);
-    res.json(item);
+    const enriched = await getAlbum(item.album_id);
+    res.json(enriched || item);
 }
 
 async function remove(req, res) {
     const { id } = req.params;
 
     const album = await getAlbum(id);
-
     if (!album) throw createError(404, 'Album not found');
 
-    if (req.user.user_id != album.artist_id) {
-        throw createError(403, 'Forbidden');
-    }
+    const userIsOwner = (album.artists || []).some(a => a.artist_id === req.user.id && a.role === 'owner');
+    if (!userIsOwner) throw createError(403, 'Forbidden');
 
     await deleteAlbumCoverFromStorage(album.album_id, album.cover_url);
 
@@ -82,3 +91,46 @@ async function remove(req, res) {
 }
 
 module.exports = { list, getOne, create, update, remove };
+
+// Owner-only management of album artists
+async function ensureOwner(req, albumId) {
+    const album = await getAlbum(albumId);
+    if (!album) throw createError(404, 'Album not found');
+    const userIsOwner = (album.artists || []).some(a => a.artist_id === req.user.id && a.role === 'owner');
+    if (!userIsOwner) throw createError(403, 'Forbidden');
+    return album;
+}
+
+async function addArtist(req, res) {
+    const { id: album_id } = req.params;
+    const { artist_id, role = 'viewer' } = req.body || {};
+    await ensureOwner(req, album_id);
+    if (!isUUID(artist_id)) throw createError(400, 'invalid artist_id');
+    if (!validateArtistRoles(role)) throw createError(400, 'invalid role');
+    const row = await createAlbumArtist(album_id, artist_id, role);
+    res.status(201).json(row);
+}
+
+async function updateArtist(req, res) {
+    const { id: album_id, artistId } = req.params;
+    const { role } = req.body || {};
+    await ensureOwner(req, album_id);
+    if (!isUUID(artistId)) throw createError(400, 'invalid artist_id');
+    if (!validateArtistRoles(role)) throw createError(400, 'invalid role');
+    const updated = await updateAlbumArtistByPair(album_id, artistId, role);
+    if (!updated) throw createError(404, 'Album artist link not found');
+    res.json(updated);
+}
+
+async function removeArtist(req, res) {
+    const { id: album_id, artistId } = req.params;
+    await ensureOwner(req, album_id);
+    if (!isUUID(artistId)) throw createError(400, 'invalid artist_id');
+    const removed = await deleteAlbumArtistByPair(album_id, artistId);
+    if (!removed) throw createError(404, 'Album artist link not found');
+    res.status(204).send();
+}
+
+module.exports.addArtist = addArtist;
+module.exports.updateArtist = updateArtist;
+module.exports.removeArtist = removeArtist;

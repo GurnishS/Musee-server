@@ -1,55 +1,57 @@
 const { supabase, supabaseAdmin } = require('../db/config');
-
+const { toNum, toDateOnly } = require('../utils/typeConversions');
+const { isUUID } = require('../utils/validators');
 const table = 'artists';
 
 function client() {
     return supabaseAdmin || supabase;
 }
 
-// helpers
-function isUUID(v) {
-    return typeof v === 'string' && /^[0-9a-fA-F-]{36}$/.test(v);
-}
-
-function toNum(v, def) {
-    if (v === undefined || v === null || v === '') return def;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : def;
-}
-
-function toDate(v) {
-    if (!v) return null;
-    const d = v instanceof Date ? v : new Date(v);
-    return isNaN(d.getTime()) ? null : d.toISOString();
-}
-
-function sanitizeInsert(payload = {}) {
+function sanitizeArtistInsert(payload = {}) {
     const out = {};
     // artist_id required (references users.user_id)
     if (!isUUID(payload.artist_id)) throw new Error('artist_id (UUID) is required');
     out.artist_id = payload.artist_id;
 
-    out.bio = typeof payload.bio === 'string' ? payload.bio.trim() : '';
+    const bio = typeof payload.bio === 'string' ? payload.bio.trim() : null;
+    if (bio == null) throw new Error('bio is required');
+    out.bio = bio;
+
     out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/artists/default_cover.png';
 
-    out.genres = Array.isArray(payload.genres) ? payload.genres.map(String) : [];
+    if (payload.genres !== undefined) {
+        if (!Array.isArray(payload.genres)) throw new Error('genres must be an array');
+        out.genres = payload.genres.map(String);
+    }
 
-    const debut_year = toNum(payload.debut_year, null);
-    if (!debut_year) throw new Error('debut_year is required');
-    out.debut_year = debut_year;
+    // debut_year is optional; validate if provided
+    if (payload.debut_year !== undefined) {
+        const debut_year = toNum(payload.debut_year, null);
+        if (debut_year === null) throw new Error('debut_year must be a valid number');
+        if (!(debut_year >= 1900 && debut_year <= new Date().getFullYear())) throw new Error('debut_year must be a valid year');
+        out.debut_year = debut_year;
+    }
 
-    out.is_verified = typeof payload.is_verified === 'boolean' ? payload.is_verified : false;
+    if (payload.is_verified !== undefined) out.is_verified = Boolean(payload.is_verified);
 
-    out.monthly_listeners = typeof payload.monthly_listeners === 'number' ? Math.max(0, Math.trunc(payload.monthly_listeners)) : 0;
+    if (payload.monthly_listeners !== undefined) {
+        out.monthly_listeners = toNum(payload.monthly_listeners, null);
+        if (out.monthly_listeners === null) throw new Error('monthly_listeners must be a valid number');
+    }
 
-    const region_id = isUUID(payload.region_id) ? payload.region_id : null;
-    if (!region_id) throw new Error('region_id is invalid or not provided');
-    out.region_id = region_id;
+    // region_id is optional; DB has a default if omitted
+    if (payload.region_id !== undefined) {
+        if (payload.region_id !== null && !isUUID(payload.region_id)) throw new Error('region_id is invalid');
+        out.region_id = payload.region_id;
+    }
 
-    out.date_of_birth = toDate(payload.date_of_birth);
+    // date_of_birth stored as DATE
+    if (payload.date_of_birth !== undefined) out.date_of_birth = toDateOnly(payload.date_of_birth);
 
-    // social_links: optional object, default {}
-    out.social_links = (payload.social_links && typeof payload.social_links === 'object') ? payload.social_links : {};
+    if (payload.social_links !== undefined) {
+        if (!(payload.social_links && typeof payload.social_links === 'object')) throw new Error('social_links must be an object');
+        out.social_links = payload.social_links;
+    }
 
     out.created_at = new Date().toISOString();
     out.updated_at = new Date().toISOString();
@@ -57,10 +59,10 @@ function sanitizeInsert(payload = {}) {
     return out;
 }
 
-function sanitizeUpdate(payload = {}) {
+function sanitizeArtistUpdate(payload = {}) {
     const out = {};
-    if (payload.bio !== undefined) out.bio = typeof payload.bio === 'string' ? payload.bio.trim() : payload.bio;
-    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : payload.cover_url;
+    if (payload.bio !== undefined) out.bio = typeof payload.bio === 'string' ? payload.bio.trim() : null;
+    if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
 
     if (payload.genres !== undefined) {
         if (!Array.isArray(payload.genres)) throw new Error('genres must be an array');
@@ -68,15 +70,16 @@ function sanitizeUpdate(payload = {}) {
     }
 
     if (payload.debut_year !== undefined) {
-        const v = Math.trunc(Number(payload.debut_year));
-        if (!Number.isFinite(v) || v <= 0) throw new Error('debut_year must be a positive number');
-        out.debut_year = v;
+        const debut_year = toNum(payload.debut_year, null);
+        if (!(debut_year >= 1900 && debut_year <= new Date().getFullYear())) throw new Error('debut_year must be a valid year');
+        out.debut_year = debut_year;
     }
 
     if (payload.is_verified !== undefined) out.is_verified = Boolean(payload.is_verified);
 
     if (payload.monthly_listeners !== undefined) {
-        out.monthly_listeners = Math.max(0, Math.trunc(toNum(payload.monthly_listeners, 0)));
+        out.monthly_listeners = toNum(payload.monthly_listeners, null);
+        if (out.monthly_listeners === null) throw new Error('monthly_listeners must be a valid number');
     }
 
     if (payload.region_id !== undefined) {
@@ -85,7 +88,7 @@ function sanitizeUpdate(payload = {}) {
     }
 
     if (payload.date_of_birth !== undefined) {
-        out.date_of_birth = toDate(payload.date_of_birth);
+        out.date_of_birth = toDateOnly(payload.date_of_birth);
     }
 
     if (payload.social_links !== undefined) {
@@ -123,14 +126,14 @@ async function getArtist(artist_id) {
 }
 
 async function createArtist(payload) {
-    const input = sanitizeInsert(payload);
+    const input = sanitizeArtistInsert(payload);
     const { data, error } = await client().from(table).insert(input).select('*').single();
     if (error) throw error;
     return data;
 }
 
 async function updateArtist(artist_id, payload) {
-    const input = sanitizeUpdate(payload);
+    const input = sanitizeArtistUpdate(payload);
     const { data, error } = await client().from(table).update({ ...input, updated_at: new Date().toISOString() }).eq('artist_id', artist_id).select('*').single();
     if (error) throw error;
     return data;
@@ -206,4 +209,4 @@ async function getArtistUser(artist_id) {
     };
 }
 
-module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, listArtistsUser, getArtistUser };
+module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, listArtistsUser, getArtistUser, sanitizeArtistInsert, sanitizeArtistUpdate };

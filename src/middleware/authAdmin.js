@@ -27,7 +27,7 @@ module.exports = async function authAdmin(req, res, next) {
         }
 
         // check if user is admin
-        user_details = await supabaseAdmin.from('users').select('*').eq('user_id', result.data.user.id).maybeSingle();
+        const user_details = await supabaseAdmin.from('users').select('*').eq('user_id', result.data.user.id).maybeSingle();
 
         if (!user_details.data || user_details.data.user_type !== 'admin') {
             //console.log(user_details);

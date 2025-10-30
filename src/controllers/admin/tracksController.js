@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const { supabase, supabaseAdmin } = require('../../db/config');
 const { processAudioBuffer } = require('../../utils/processAudio');
 const { listTracks, getTrack, createTrack, updateTrack, deleteTrack } = require('../../models/trackModel');
+const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudiosModel');
 const { uploadTrackCoverToStorage, uploadTrackVideoToStorage, deleteTrackVideoFromStorage, deleteTrackCoverFromStorage } = require('../../utils/supabaseStorage');
 
 function getFileFromReq(req, field) {
@@ -33,8 +34,14 @@ async function create(req, res) {
     // expect form-data fields and files
     const body = { ...req.body };
 
-    // initially create track without files and is_published=false
-    body.audio_files = null;
+    // Validate required files
+    const audioFileRequired = getFileFromReq(req, 'audio');
+    const coverFileRequired = getFileFromReq(req, 'cover');
+    if (!audioFileRequired || !coverFileRequired) {
+        return res.status(400).json({ error: 'audio and cover files are required' });
+    }
+
+    // initially create track without audio and is_published=false
     body.is_published = false;
     var result;
     const created = await createTrack(body);
@@ -42,11 +49,19 @@ async function create(req, res) {
     result = created;
 
     // if audio file present, process it now using the canonical created.track_id
-    const audioFile = getFileFromReq(req, 'audio');
+    const audioFile = audioFileRequired;
     if (audioFile) {
         try {
             const audioResult = await processAudioBuffer(audioFile, created.track_id);
-            const updated = await updateTrack(created.track_id, { audio_files: audioResult.files, is_published: true });
+            // persist audio variants into track_audios
+            for (const [key, url] of Object.entries(audioResult.files || {})) {
+                // key format like '320k_mp3' or '96k_ogg'
+                const [kbPart, extPart] = key.split('_');
+                const bitrate = Number.parseInt(kbPart.replace('k', ''), 10);
+                const ext = extPart.toLowerCase();
+                await addTrackAudio(created.track_id, ext, bitrate, url);
+            }
+            const updated = await updateTrack(created.track_id, { is_published: true });
             result = updated;
         } catch (e) {
             console.error('Audio processing failed after track creation:', e?.message || e);
@@ -56,12 +71,13 @@ async function create(req, res) {
     }
 
     // if cover image present, upload it
-    const cover = getFileFromReq(req, 'cover');
+    const cover = coverFileRequired;
     if (cover) {
         const coverUrl = await uploadTrackCoverToStorage(created.track_id, cover);
-        if (coverUrl) {
-            result = await updateTrack(created.track_id, { cover_url: coverUrl });
+        if (!coverUrl) {
+            return res.status(500).json({ error: 'Cover upload failed', track_id: created.track_id });
         }
+        result = await updateTrack(created.track_id, { cover_url: coverUrl });
     }
 
     // if video is present, upload it
@@ -85,17 +101,25 @@ async function update(req, res) {
 
     result = await updateTrack(id, body);
 
-    // if audio file present, process it now using the canonical created.track_id
+    // if audio file present, process it now and update track_audios
     const audioFile = getFileFromReq(req, 'audio');
     if (audioFile) {
         try {
             const audioResult = await processAudioBuffer(audioFile, id);
-            const updated = await updateTrack(id, { audio_files: audioResult.files, is_published: true });
+            // replace existing audios
+            await deleteAudiosForTrack(id);
+            for (const [key, url] of Object.entries(audioResult.files || {})) {
+                const [kbPart, extPart] = key.split('_');
+                const bitrate = Number.parseInt(kbPart.replace('k', ''), 10);
+                const ext = extPart.toLowerCase();
+                await addTrackAudio(id, ext, bitrate, url);
+            }
+            const updated = await updateTrack(id, { is_published: true });
             result = updated;
         } catch (e) {
             console.error('Audio processing failed after track creation:', e?.message || e);
             // return created record but indicate processing failed
-            return res.status(500).json({ error: 'Audio processing failed', track: created });
+            return res.status(500).json({ error: 'Audio processing failed', track_id: id });
         }
     }
 
@@ -126,7 +150,8 @@ async function remove(req, res) {
     if (!track) throw createError(404, 'Track not found');
     await deleteTrackVideoFromStorage(track.track_id, track.video_url)
     await deleteTrackCoverFromStorage(track.track_id, track.cover_url)
-    //TODO delete audio files
+    // delete audio DB rows; blob deletion is managed by storage lifecycle if any
+    await deleteAudiosForTrack(id);
     await deleteTrack(id);
     res.status(204).send();
 }

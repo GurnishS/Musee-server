@@ -10,4 +10,8 @@ router.post('/', uploadCover, ctrl.create);
 router.patch('/:id', uploadCover, ctrl.update);
 router.delete('/:id', ctrl.remove);
 
+// Manage tracks within a playlist
+router.post('/:id/tracks', ctrl.addTrack);
+router.delete('/:id/tracks/:trackId', ctrl.removeTrack);
+
 module.exports = router;

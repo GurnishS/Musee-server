@@ -1,6 +1,4 @@
 const createError = require('http-errors');
-const mime = require('mime-types');
-const { supabase, supabaseAdmin } = require('../../db/config');
 const {
     getArtist,
     createArtist,
@@ -12,94 +10,13 @@ const {
 const { updateUser } = require('../../models/userModel');
 const { uploadArtistCoverToStorage } = require('../../utils/supabaseStorage');
 
-
-// --- sanitization helpers for user-owned artist ops ---
-function isUUID(v) {
-    return typeof v === 'string' && /^[0-9a-fA-F-]{36}$/.test(v);
-}
-function toNum(v, def = null) {
-    if (v === undefined || v === null || v === '') return def;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : def;
-}
-
-function sanitizeArtistCreateInput(body = {}) {
+function filterAllowedFields(payload) {
+    // Whitelist fields that users can update about themselves
+    const allowed = new Set(['bio', 'cover_url', 'genres', 'social_links', 'region_id', 'date_of_birth', 'debut_year']);
     const out = {};
-    // bio, cover_url
-    if (body.bio !== undefined) out.bio = typeof body.bio === 'string' ? body.bio.trim() : '';
-    if (body.cover_url !== undefined) out.cover_url = typeof body.cover_url === 'string' ? body.cover_url.trim() : body.cover_url;
-
-    // genres: accept array or CSV string
-    if (Array.isArray(body.genres)) {
-        out.genres = body.genres.map(String);
-    } else if (typeof body.genres === 'string') {
-        const t = body.genres.trim();
-        out.genres = t ? (t.includes(',') ? t.split(',').map(s => s.trim()).filter(Boolean) : [t]) : [];
-    }
-
-    // debut_year: required
-    const debut = toNum(body.debut_year, null);
-    if (debut === null || !Number.isFinite(debut) || Math.trunc(debut) <= 0) {
-        throw createError(400, 'debut_year is required and must be a positive number');
-    }
-    out.debut_year = Math.trunc(debut);
-
-    // is_verified: ignore on user create (server sets false by default)
-    if (body.is_verified !== undefined) {
-        out.is_verified = body.is_verified === true || body.is_verified === 'true';
-    }
-
-    // region_id: required UUID
-    if (!isUUID(body.region_id)) throw createError(400, 'region_id (UUID) is required');
-    out.region_id = body.region_id;
-
-    // date_of_birth: pass through
-    if (body.date_of_birth !== undefined) out.date_of_birth = body.date_of_birth;
-
-    // social_links: object or JSON string
-    if (body.social_links !== undefined) {
-        if (typeof body.social_links === 'string') {
-            try { out.social_links = JSON.parse(body.social_links); }
-            catch { throw createError(400, 'social_links must be valid JSON'); }
-        } else if (body.social_links && typeof body.social_links === 'object') {
-            out.social_links = body.social_links;
-        } else {
-            throw createError(400, 'social_links must be an object');
-        }
-    }
-
-    return out;
-}
-
-function sanitizeArtistUpdateInput(body = {}) {
-    const out = {};
-    if (body.bio !== undefined) out.bio = typeof body.bio === 'string' ? body.bio.trim() : body.bio;
-    if (body.cover_url !== undefined) out.cover_url = typeof body.cover_url === 'string' ? body.cover_url.trim() : body.cover_url;
-    if (body.genres !== undefined) {
-        if (Array.isArray(body.genres)) out.genres = body.genres.map(String);
-        else if (typeof body.genres === 'string') {
-            const t = body.genres.trim();
-            out.genres = t ? (t.includes(',') ? t.split(',').map(s => s.trim()).filter(Boolean) : [t]) : [];
-        } else throw createError(400, 'genres must be an array or CSV string');
-    }
-    if (body.debut_year !== undefined) {
-        const v = Math.trunc(toNum(body.debut_year, 0));
-        if (!Number.isFinite(v) || v <= 0) throw createError(400, 'debut_year must be a positive number');
-        out.debut_year = v;
-    }
-    if (body.is_verified !== undefined) out.is_verified = body.is_verified === true || body.is_verified === 'true';
-    if (body.region_id !== undefined) {
-        if (body.region_id !== null && !isUUID(body.region_id)) throw createError(400, 'region_id must be a UUID or null');
-        out.region_id = body.region_id;
-    }
-    if (body.date_of_birth !== undefined) out.date_of_birth = body.date_of_birth;
-    if (body.social_links !== undefined) {
-        if (typeof body.social_links === 'string') {
-            try { out.social_links = JSON.parse(body.social_links); }
-            catch { throw createError(400, 'social_links must be valid JSON'); }
-        } else if (body.social_links && typeof body.social_links === 'object') {
-            out.social_links = body.social_links;
-        } else throw createError(400, 'social_links must be an object');
+    for (const key of Object.keys(payload || {})) {
+        if (allowed.has(key)) out[key] = payload[key];
+        else throw createError(403, 'invalid field ' + key);
     }
     return out;
 }
@@ -132,11 +49,12 @@ async function create(req, res) {
     if (existing) throw createError(409, 'Artist profile already exists');
 
     // Sanitize artist inputs BEFORE any DB calls
-    const body = { ...req.body };
-    const artistInput = sanitizeArtistCreateInput(body);
+    const body = filterAllowedFields({ ...req.body });
+    // Ensure artist_id references the authenticated user
+    body.artist_id = userId;
 
     // Create artist referencing current user
-    let artist = await createArtist({ ...artistInput, artist_id: userId });
+    let artist = await createArtist(body);
 
     // Upload cover if provided and update
     if (req.file) {
@@ -146,7 +64,7 @@ async function create(req, res) {
         }
     }
 
-    // Update user_type -> 'artist'
+    // Update user_type -> 'artist' 
     try { await updateUser(userId, { user_type: 'artist' }); } catch { }
 
     return res.status(201).json(artist);
@@ -159,14 +77,12 @@ async function update(req, res) {
     if (!userId) throw createError(401, 'Unauthorized');
     if (id !== userId) throw createError(403, 'Forbidden');
 
-    const body = { ...req.body };
-    const payload = sanitizeArtistUpdateInput(body);
+    const body = filterAllowedFields({ ...req.body });
+    const item = await updateArtist(userId, body);
     if (req.file) {
         const coverUrl = await uploadArtistCoverToStorage(userId, req.file);
-        if (coverUrl) payload.cover_url = coverUrl;
+        if (coverUrl) item.cover_url = coverUrl;
     }
-
-    const item = await updateArtist(userId, payload);
     res.json(item);
 }
 

@@ -1,10 +1,11 @@
 const createError = require('http-errors');
-const { listUsers, getUser, createUser, updateUser, deleteUser } = require('../../models/userModel');
+const { listUsers, getUser, createUser, updateUser, deleteUser, sanitizeUserInsert } = require('../../models/userModel');
 const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage } = require('../../utils/supabaseStorage');
+const { createAuthUser } = require('../../models/authUserModel');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
-    const page = Math.max(0, Number(req.query.page) || 0);
+    const page = Math.max(0, Number(req.query.page) || 0); // zero-based
     const q = req.query.q || undefined;
     const offset = page * limit;
     const { items, total } = await listUsers({ limit, offset, q });
@@ -20,13 +21,14 @@ async function getOne(req, res) {
 
 async function create(req, res) {
     // req.file may be provided by multer
-    const payload = { ...req.body };
+    const payload = sanitizeUserInsert({ ...req.body });
+    console.log(payload);
     // create user record first to ensure user_id exists in auth
-    const user = await createUser(payload);
+    const authUser = await createAuthUser(payload.name, payload.email, payload.password);
 
     //it automatically sets some columns in users table
     //lets update other fields
-    const user_final = await updateUser(user.id, payload);
+    const user_final = await updateUser(authUser.id, payload);
 
     // upload avatar if file present    
     if (req.file) {

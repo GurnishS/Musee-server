@@ -1,5 +1,6 @@
 const createError = require('http-errors');
 const { listAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum } = require('../../models/albumModel');
+const { createAlbumArtist, updateAlbumArtistByPair, deleteAlbumArtistByPair } = require('../../models/albumArtistsModel');
 const { uploadAlbumCoverToStorage, deleteAlbumCoverFromStorage } = require('../../utils/supabaseStorage');
 
 async function list(req, res) {
@@ -19,9 +20,17 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-    // Create first to get album_id, then upload cover if present
+    // Admin must provide artist_id for album ownership
     const payload = { ...req.body };
+    const artist_id = payload.artist_id;
+    if (!artist_id) {
+        return res.status(400).json({ message: 'artist_id is required' });
+    }
+
     const album = await createAlbum(payload);
+    // Link required owner
+    await createAlbumArtist(album.album_id, artist_id, 'owner');
+
     if (req.file) {
         const coverUrl = await uploadAlbumCoverToStorage(album.album_id, req.file);
         if (coverUrl) {
@@ -30,6 +39,38 @@ async function create(req, res) {
         }
     }
     res.status(201).json(album);
+}
+
+// Manage album artists (admin)
+const { isUUID, validateArtistRoles } = require('../../utils/validators');
+
+async function addArtist(req, res) {
+    const { id: album_id } = req.params;
+    const { artist_id, role = 'viewer' } = req.body || {};
+    if (!isUUID(album_id) || !isUUID(artist_id)) return res.status(400).json({ message: 'invalid album_id or artist_id' });
+    if (!validateArtistRoles(role)) return res.status(400).json({ message: 'invalid role' });
+    const row = await createAlbumArtist(album_id, artist_id, role);
+    res.status(201).json(row);
+}
+
+async function updateArtist(req, res) {
+    const { id: album_id, artistId } = req.params;
+    const { role } = req.body || {};
+    if (!isUUID(album_id) || !isUUID(artistId)) return res.status(400).json({ message: 'invalid album_id or artist_id' });
+    if (!validateArtistRoles(role)) return res.status(400).json({ message: 'invalid role' });
+
+    // Update by album+artist pair using model's update (which uses id)
+    const updated = await updateAlbumArtistByPair(album_id, artistId, role);
+    if (!updated) return res.status(404).json({ message: 'Album artist link not found' });
+    res.json(updated);
+}
+
+async function removeArtist(req, res) {
+    const { id: album_id, artistId } = req.params;
+    if (!isUUID(album_id) || !isUUID(artistId)) return res.status(400).json({ message: 'invalid album_id or artist_id' });
+    const removed = await deleteAlbumArtistByPair(album_id, artistId);
+    if (!removed) return res.status(404).json({ message: 'Album artist link not found' });
+    res.status(204).send();
 }
 
 async function update(req, res) {
@@ -54,4 +95,4 @@ async function remove(req, res) {
     res.status(204).send();
 }
 
-module.exports = { list, getOne, create, update, remove };
+module.exports = { list, getOne, create, update, remove, addArtist, updateArtist, removeArtist };

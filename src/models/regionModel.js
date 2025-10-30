@@ -1,4 +1,3 @@
-const { tr } = require('zod/locales');
 const { supabase, supabaseAdmin } = require('../db/config');
 
 const table = 'regions';
@@ -107,4 +106,4 @@ async function getRegionUser(region_id) {
     return data;
 }
 
-module.exports = { listRegions, getRegion, createRegion, updateRegion, deleteRegion ,listRegionsUser, getRegionUser};
+module.exports = { listRegions, getRegion, createRegion, updateRegion, deleteRegion, listRegionsUser, getRegionUser };
