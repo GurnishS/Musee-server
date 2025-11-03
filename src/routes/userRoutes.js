@@ -11,6 +11,7 @@ const albumsRoutes = require('./user/albumRoutes');
 const tracksRoutes = require('./user/trackRoutes');
 const playlistsRoutes = require('./user/playlistRoutes');
 const followRoutes = require('./user/followRoutes');
+const dashboardRoutes = require('./user/dashboardRoutes');
 
 
 router.use(authUser);
@@ -23,5 +24,6 @@ router.use('/albums', albumsRoutes);
 router.use('/tracks', tracksRoutes);
 router.use('/playlists', playlistsRoutes);
 router.use('/follows', followRoutes);
+router.use('/dashboard', dashboardRoutes);
 
 module.exports = router;
