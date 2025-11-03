@@ -42,4 +42,14 @@ function isAbsoluteUrl(u) {
     return typeof u === 'string' && /^https?:\/\//i.test(u);
 }
 
-module.exports = { getBlobSasUrl, isAbsoluteUrl };
+function getBlobPublicUrl(blobPath) {
+    const fromEnvConn = process.env.AZURE_STORAGE_CONNECTION_STRING;
+    const parsed = parseConnString(fromEnvConn);
+    const accountName = process.env.AZURE_STORAGE_ACCOUNT || parsed.AccountName;
+    if (!accountName) {
+        throw new Error('Azure Storage account not configured (AZURE_STORAGE_ACCOUNT or AZURE_STORAGE_CONNECTION_STRING)');
+    }
+    return `https://${accountName}.blob.core.windows.net/${containerName}/${blobPath}`;
+}
+
+module.exports = { getBlobSasUrl, isAbsoluteUrl, getBlobPublicUrl };

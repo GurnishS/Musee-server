@@ -181,3 +181,14 @@ create table public.countries (
   constraint countries_pkey primary key (country_id),
   constraint countries_code_key unique (code)
 ) TABLESPACE pg_default;
+
+
+
+create table public.followers (
+  follower_id uuid not null,
+  following_id uuid not null,
+  created_at timestamp without time zone null default now(),
+  constraint followers_pkey primary key (follower_id, following_id),
+  constraint followers_follower_id_fkey foreign KEY (follower_id) references users (user_id) on update CASCADE on delete CASCADE,
+  constraint followers_following_id_fkey foreign KEY (following_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;

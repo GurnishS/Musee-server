@@ -24,6 +24,14 @@ async function createAuthUser(name, email, password) {
     return createdUser;
 }
 
+async function deleteAuthUser(user_id) {
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(user_id);
+    if (error) throw error;
+    return true;
+}
+
+
 module.exports = {
-    createAuthUser
+    createAuthUser,
+    deleteAuthUser
 }

@@ -6,7 +6,8 @@ Key points:
 - Pagination is zero-based: page 0 is the first page. `limit` is capped at 100.
 - Audio uploads generate variants and are stored in `track_audios` with fields: `ext`, `bitrate` (kbps), and `path` (URL).
 - Artists linked to a track are exposed via `artists` array on responses (sourced from `track_artists`).
- - Tracks do not have a cover image; use the album's `cover_url`.
+- Tracks do not have a cover image; use the album's `cover_url`.
+- HLS: responses include a `hls` object with a public `master` m3u8 URL and per-quality variant m3u8 URLs when the HLS container is public.
 
 ## Common object shape
 
@@ -27,6 +28,14 @@ Track object (admin responses include more fields; user list is a smaller projec
   "updated_at": "ISO",
   "video_url": "string|null",
   "is_published": true|false,
+  "hls": {                     // public HLS URLs (container must be public)
+    "master": "https://<account>.blob.core.windows.net/<container>/hls/track_<id>/master.m3u8",
+    "variants": [
+      { "bitrate": 96,  "url": "https://.../hls/track_<id>/v96/index.m3u8" },
+      { "bitrate": 160, "url": "https://.../hls/track_<id>/v160/index.m3u8" },
+      { "bitrate": 320, "url": "https://.../hls/track_<id>/v320/index.m3u8" }
+    ]
+  },
   "artists": [                  // joined via track_artists → artists → users
     {
       "artist_id": "uuid",
@@ -195,6 +204,10 @@ Response:
       "title": "string",
       "duration": number,
       "created_at": "ISO",
+      "hls": {
+        "master": "https://.../hls/track_<id>/master.m3u8",
+        "variants": [ { "bitrate": 96, "url": "https://.../v96/index.m3u8" }, { "bitrate": 160, "url": "https://.../v160/index.m3u8" }, { "bitrate": 320, "url": "https://.../v320/index.m3u8" } ]
+      },
       "artists": [ { "artist_id": "uuid", "name": "string", "avatar_url": "string|null" } ]
     }
   ],
@@ -218,10 +231,31 @@ Response:
   "is_explicit": boolean,
   "likes_count": number,
   "created_at": "ISO",
+  "hls": {
+    "master": "https://.../hls/track_<id>/master.m3u8",
+    "variants": [ { "bitrate": 96, "url": "https://.../v96/index.m3u8" }, { "bitrate": 160, "url": "https://.../v160/index.m3u8" }, { "bitrate": 320, "url": "https://.../v320/index.m3u8" } ]
+  },
   "artists": [ { "artist_id": "uuid", "name": "string", "avatar_url": "string|null" } ],
   "audios": [ { "ext": "mp3|ogg", "bitrate": number, "path": "string" } ]
 }
 ```
+
+### HLS streaming for a track
+
+There are two ways to stream HLS:
+
+1) Public container (simplest): clients use the public blob URLs returned in `hls.master` and `hls.variants`, no auth headers required.
+
+2) Private container (secure): use API endpoints that rewrite playlists to SAS-signed URLs and require Authorization.
+
+Endpoints (secure mode):
+- `GET /api/user/tracks/:id/hls/master.m3u8` — returns a rewritten master playlist (Content-Type: application/vnd.apple.mpegurl)
+- `GET /api/user/tracks/:id/hls/v:bitrate/index.m3u8` — returns a rewritten variant playlist with signed segment URIs
+
+Notes:
+- Public mode: play `hls.master` directly; for manual quality selection, use `hls.variants[*].url`.
+- Private mode: include `Authorization: Bearer <JWT>` when calling API endpoints. The playlists embed time-limited SAS URLs; refresh by re-fetching master if they expire during playback.
+- See “Adaptive Streaming (HLS)” guide: `docs/streaming-hls.md`.
 
 ### POST /api/user/tracks
 Create a new track (authenticated user). Caller must be album owner for the specified `album_id`.
@@ -270,5 +304,7 @@ Response: `204 No Content`.
 ## Notes and edge cases
 - If audio processing fails, the API returns `500` with `{ error: 'Audio processing failed', track: <partial> }` for creates or `{ error: 'Audio processing failed', track_id: <id> }` for updates. The track may still be created/updated without audio variants.
 - Source audio bitrate determines generated variants: mp3 at source bitrate, ogg at 96/160/320kbps up to source bitrate.
-- Clients should prefer the highest supported bitrate and fall back gracefully.
+- Clients can either:
+  - Use HLS for adaptive playback (`hls.master`) — recommended.
+  - Or pick a specific quality with `hls.variants` or `audios` (progressive).
 - Ensure `album_id` is valid and the requesting user has permission to manage the album/track (enforced by middleware).

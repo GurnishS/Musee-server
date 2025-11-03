@@ -1,7 +1,7 @@
 const createError = require('http-errors');
 const { listUsers, getUser, createUser, updateUser, deleteUser, sanitizeUserInsert } = require('../../models/userModel');
 const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage } = require('../../utils/supabaseStorage');
-const { createAuthUser } = require('../../models/authUserModel');
+const { createAuthUser, deleteAuthUser } = require('../../models/authUserModel');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -62,6 +62,7 @@ async function remove(req, res) {
     }
     await deleteUserAvatarFromStorage(id, user.avatar_url);
     await deleteUser(id);
+    await deleteAuthUser(id);
     res.status(204).send();
 }
 

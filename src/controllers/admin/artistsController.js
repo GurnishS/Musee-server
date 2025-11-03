@@ -2,6 +2,7 @@ const createError = require('http-errors');
 const { listArtists, getArtist, createArtist, updateArtist, deleteArtist, sanitizeArtistInsert } = require('../../models/artistModel');
 const { createUser, updateUser, sanitizeUserInsert } = require('../../models/userModel');
 const { uploadUserAvatarToStorage, uploadArtistCoverToStorage } = require('../../utils/supabaseStorage');
+const { createAuthUser } = require('../../models/authUserModel');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -26,17 +27,19 @@ async function create(req, res) {
     if (!artist_id) {
         const userInput = sanitizeUserInsert(body);
         //Create user
-        const authUser = await createUser(userInput);
+        const authUser = await createAuthUser(userInput.name, userInput.email, userInput.password);
+        const user = await updateUser(authUser.id, userInput);
         // 1a) If avatar file provided, upload and set on user
         const avatarFile = req.files?.avatar?.[0];
         if (avatarFile) {
-            const avatarUrl = await uploadUserAvatarToStorage(authUser.id, avatarFile);
+            const avatarUrl = await uploadUserAvatarToStorage(user.user_id, avatarFile);
             if (avatarUrl) {
-                try { await updateUser(authUser.id, { avatar_url: avatarUrl }); } catch { }
+                try { await updateUser(user.user_id, { avatar_url: avatarUrl }); } catch { }
             }
         }
-        body.artist_id = authUser.user_id;
+        body.artist_id = user.user_id;
     }
+    console.log("Creating artist with data:", body);
     const artistInput = sanitizeArtistInsert(body);
 
     // Create artist with the new user id

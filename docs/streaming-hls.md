@@ -1,6 +1,6 @@
 # Adaptive Streaming (HLS) for Musee
 
-This guide explains how to deliver secure, adaptive (HLS) audio streaming from Azure Blob Storage to your Flutter app.
+This guide explains how to deliver adaptive (HLS) audio streaming from Azure Blob Storage to your Flutter app. You can run in either public or private blob modes.
 
 ## Overview
 
@@ -16,8 +16,7 @@ You will:
 
 ## 1) Storage layout and settings
 
-- Keep your blob container PRIVATE (no anonymous access). Reuse `AZURE_STORAGE_CONTAINER` (default `media`).
-- Suggested layout per track:
+Suggested layout per track:
 
 ```
 media/
@@ -86,11 +85,20 @@ Implementation tips in Node:
 
 ---
 
-## 3) Secure delivery patterns
+## 3) Delivery patterns (choose one)
 
-Choose ONE of the following.
+You can expose HLS in three ways:
 
-### A) Signed URLs (SAS) with playlist rewrite (balanced)
+### A) Public container, direct HLS (simplest)
+
+- Configure your blob container to allow anonymous read.
+- Clients play the public blob URLs directly (e.g., `https://<account>.blob.core.windows.net/<container>/hls/track_<id>/master.m3u8`).
+- The API can include these URLs in responses (see `hls.master` and `hls.variants` in Tracks API).
+
+Pros: zero auth plumbing for media element (works well on web), fully CDN-cacheable.
+Cons: no per-user access control; URLs are discoverable by anyone with the link.
+
+### B) Signed URLs (SAS) with playlist rewrite (balanced, private container)
 
 - Keep container private.
 - When a user requests a track stream, your API:
@@ -106,11 +114,11 @@ Azure SDK hint:
 - Use `@azure/storage-blob` and `StorageSharedKeyCredential` (requires `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_ACCOUNT_KEY`).
 - Generate SAS per blob using `generateBlobSASQueryParameters` with `permissions: r`.
 
-Endpoint shapes (implemented):
+Endpoint shapes (implemented in user routes):
 - `GET /api/user/tracks/:id/hls/master.m3u8` → returns rewritten master playlist with SAS URLs to variant playlists.
 - `GET /api/user/tracks/:id/hls/v:bitrate/index.m3u8` → returns rewritten variant playlist with SAS URLs to segment files.
 
-### B) Proxy playlists and segments via API (most secure)
+### C) Proxy playlists and segments via API (most secure, private container)
 
 - Keep container private.
 - Your API serves:
@@ -134,35 +142,96 @@ Implementation notes:
   - Option A: create `track_streams` table: `(track_id UUID PK, hls_path TEXT, created_at TIMESTAMPTZ)`.
   - Option B: reuse `track_audios` with `ext = 'm3u8'` and `path` = master playlist path.
 - User API:
-  - HLS endpoints added (SAS rewrite):
+  - If public container: `GET /api/user/tracks/:id` includes `hls` with public URLs (master + variant m3u8s).
+  - If private container: HLS endpoints (SAS rewrite) are exposed:
     - `GET /api/user/tracks/:id/hls/master.m3u8`
     - `GET /api/user/tracks/:id/hls/v:bitrate/index.m3u8`
-  - `GET /api/user/tracks/:id` can optionally include an `hls` object in the future (e.g., availability or convenience URL).
 
 ---
 
-## 5) Flutter client
+## 5) Flutter client (just_audio)
 
 Use `just_audio` (recommended). ExoPlayer/AVPlayer handle HLS on Android/iOS.
 
+### Dependencies
+
+Add these to your `pubspec.yaml`:
+
+```
+just_audio: ^0.9.39
+audio_session: ^0.1.21
+just_audio_background: ^0.0.1-beta.11 # optional, for Android/iOS background
+```
+
+On iOS, enable background audio in Xcode Capabilities (Audio, AirPlay, and Picture in Picture).
+
+### Minimal player to stream HLS master
+
 ```dart
+import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 
-final player = AudioPlayer();
+class HlsPlayer {
+  final _player = AudioPlayer();
 
-Future<void> playHls(String masterUrlOrApiEndpoint) async {
-  await player.setUrl(masterUrlOrApiEndpoint, headers: {
-    // If using tokened API endpoints, include Authorization here
-    // 'Authorization': 'Bearer <JWT>',
-  });
-  await player.play();
+  Future<void> init() async {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.music());
+  }
+
+  Future<void> playMaster(String url, {String? jwt}) async {
+    try {
+      await _player.setUrl(url, headers: {
+        if (jwt != null) 'Authorization': 'Bearer $jwt',
+      });
+      await _player.play();
+    } catch (e) {
+      // Handle 403 / expired SAS or other errors
+      rethrow;
+    }
+  }
+
+  Future<void> dispose() => _player.dispose();
 }
 ```
 
-Notes:
-- If using signed (SAS) URLs, no extra headers needed; pass the master.m3u8 SAS URL.
-- If using proxied API, pass the API URL and include Authorization header.
-- For background playback: pair `just_audio` with `audio_service` / `just_audio_background`.
+Usage with public blob URL (no headers):
+
+```dart
+final player = HlsPlayer();
+await player.init();
+final masterUrl = 'https://<account>.blob.core.windows.net/<container>/hls/track_<id>/master.m3u8';
+await player.playMaster(masterUrl);
+```
+
+Usage with private API endpoint requiring auth headers:
+
+```dart
+final masterUrl = 'https://api.example.com/api/user/tracks/<track_id>/hls/master.m3u8';
+await player.playMaster(masterUrl, jwt: '<JWT>');
+```
+
+### Handling expired SAS (refresh-and-retry)
+
+```dart
+Future<void> playWithRefresh(AudioPlayer player, Future<String> fetchMasterUrl) async {
+  try {
+    final url = await fetchMasterUrl();
+    await player.setUrl(url);
+    await player.play();
+  } catch (e) {
+    // If playback fails midstream (e.g., segments 403), refresh master and resume
+    final url = await fetchMasterUrl();
+    await player.setUrl(url);
+    await player.play();
+  }
+}
+```
+
+Tips:
+- Public mode: play `hls.master` directly; no headers.
+- Private mode: include Authorization headers on API HLS endpoints. If SAS expires, re-fetch master and resume.
+- For background playback: pair `just_audio` with `just_audio_background` or `audio_service`.
 
 ---
 
