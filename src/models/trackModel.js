@@ -305,4 +305,151 @@ async function getTrackUser(track_id) {
     };
 }
 
-module.exports = { listTracks, getTrack, createTrack, updateTrack, deleteTrack, listTracksUser, getTrackUser };
+async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {}) {
+    if (!isUUID(artist_id)) throw new Error('artist_id is invalid');
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    let qb = client()
+        .from(table)
+        .select(`
+            track_id, title, album_id, lyrics_url, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published,
+            track_artists:track_artists!inner(
+                role,
+                artists:artists!track_artists_artist_id_fkey(
+                    artist_id,
+                    users:users!artists_artist_id_fkey(user_id, name, avatar_url)
+                )
+            ),
+            track_audios:track_audios!audio_info_track_id_fkey(
+                id, ext, bitrate, path, created_at
+            )
+        `, { count: 'exact' })
+        .eq('track_artists.artist_id', artist_id)
+        .order('created_at', { ascending: false });
+    if (q) qb = qb.ilike('title', `%${q}%`);
+
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+
+    const toSignedAudio = (a) => {
+        try {
+            const p = a.path;
+            const url = isAbsoluteUrl(p) ? p : getBlobSasUrl(p);
+            return { id: a.id, ext: a.ext, bitrate: a.bitrate, path: url, created_at: a.created_at };
+        } catch (e) {
+            return { id: a.id, ext: a.ext, bitrate: a.bitrate, path: a.path, created_at: a.created_at };
+        }
+    };
+
+    const items = (data || []).map(row => ({
+        track_id: row.track_id,
+        title: row.title,
+        album_id: row.album_id,
+        lyrics_url: row.lyrics_url,
+        duration: row.duration,
+        play_count: row.play_count,
+        is_explicit: row.is_explicit,
+        likes_count: row.likes_count,
+        popularity_score: row.popularity_score,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        video_url: row.video_url,
+        is_published: row.is_published,
+        hls: {
+            master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
+            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
+        },
+        artists: (row.track_artists || []).map(ta => ({
+            artist_id: ta?.artists?.artist_id || null,
+            role: ta?.role || null,
+            name: ta?.artists?.users?.name || null,
+            avatar_url: ta?.artists?.users?.avatar_url || null,
+        })),
+        audios: (row.track_audios || []).map(toSignedAudio),
+    }));
+    return { items, total: count };
+}
+
+async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } = {}) {
+    if (!isUUID(artist_id)) throw new Error('artist_id is invalid');
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    let qb = client()
+        .from(table)
+        .select(`
+            track_id, title, duration, created_at,
+            track_artists:track_artists!inner(
+                artists:artists!track_artists_artist_id_fkey(
+                    artist_id,
+                    users:users!artists_artist_id_fkey(name, avatar_url)
+                )
+            )
+        `, { count: 'exact' })
+        .eq('is_published', true)
+        .eq('track_artists.artist_id', artist_id)
+        .order('created_at', { ascending: false });
+    if (q) qb = qb.ilike('title', `%${q}%`);
+
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    const items = (data || []).map(row => ({
+        track_id: row.track_id,
+        title: row.title,
+        duration: row.duration,
+        created_at: row.created_at,
+        hls: {
+            master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
+            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
+        },
+        artists: (row.track_artists || []).map(ta => ({
+            artist_id: ta?.artists?.artist_id || null,
+            name: ta?.artists?.users?.name || null,
+            avatar_url: ta?.artists?.users?.avatar_url || null,
+        })),
+    }));
+    return { items, total: count };
+}
+
+module.exports = { listTracks, getTrack, createTrack, updateTrack, deleteTrack, listTracksUser, getTrackUser, listTracksByArtist, listTracksByArtistUser };
+async function listTracksByIdsUser(trackIds = []) {
+    if (!Array.isArray(trackIds) || trackIds.length === 0) return [];
+    const ids = trackIds.filter(Boolean);
+    if (ids.length === 0) return [];
+    const { data, error } = await client()
+        .from(table)
+        .select(`
+            track_id, title, duration, created_at,
+            track_artists:track_artists!track_artists_track_id_fkey(
+                artists:artists!track_artists_artist_id_fkey(
+                    artist_id,
+                    users:users!artists_artist_id_fkey(name, avatar_url)
+                )
+            )
+        `)
+        .in('track_id', ids)
+        .eq('is_published', true);
+    if (error) throw error;
+    const map = new Map((data || []).map(row => [row.track_id, {
+        track_id: row.track_id,
+        title: row.title,
+        duration: row.duration,
+        created_at: row.created_at,
+        hls: {
+            master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
+            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
+        },
+        artists: (row.track_artists || []).map(ta => ({
+            artist_id: ta?.artists?.artist_id || null,
+            name: ta?.artists?.users?.name || null,
+            avatar_url: ta?.artists?.users?.avatar_url || null,
+        }))
+    }]));
+    // preserve order
+    return ids.map(id => map.get(id)).filter(Boolean);
+}
+
+module.exports.listTracksByIdsUser = listTracksByIdsUser;

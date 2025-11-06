@@ -163,7 +163,8 @@ async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
 
     if (q) {
         // Search in artist bio or user name
-        qb = qb.or(`bio.ilike.%${q}%,users.name.ilike.%${q}%`);
+        // Wrap the OR expression in parentheses to form a valid PostgREST logic tree
+        qb = qb.or(`(bio.ilike.%${q}%,users.name.ilike.%${q}%)`);
     }
 
     const { data, error, count } = await qb.range(start, end);

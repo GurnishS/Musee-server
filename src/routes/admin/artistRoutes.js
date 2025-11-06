@@ -8,6 +8,8 @@ const uploadAvatarAndCover = require('../../middleware/uploadAvatarAndCover');
 
 router.get('/', ctrl.list);
 router.get('/:id', ctrl.getOne);
+router.get('/:id/tracks', ctrl.listTracks);
+router.get('/:id/albums', ctrl.listAlbums);
 router.post('/', uploadAvatarAndCover, ctrl.create);
 router.patch('/:id', uploadCover, ctrl.update);
 router.delete('/:id', ctrl.remove);

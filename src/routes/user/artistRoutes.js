@@ -6,6 +6,8 @@ const uploadCover = require('../../middleware/uploadCover');
 
 router.get('/', ctrl.list);
 router.get('/:id', ctrl.getOne);
+router.get('/:id/tracks', ctrl.listTracks);
+router.get('/:id/albums', ctrl.listAlbums);
 router.post('/', uploadCover, ctrl.create);
 router.patch('/:id', uploadCover, ctrl.update);
 router.delete('/:id', ctrl.remove);

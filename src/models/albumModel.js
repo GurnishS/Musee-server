@@ -298,3 +298,92 @@ async function getAlbumUser(album_id) {
 }
 
 module.exports = { listAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum, listAlbumsUser, getAlbumUser, sanitizeAlbumInsert, sanitizeAlbumUpdate };
+async function listAlbumsByArtist({ artist_id, limit = 20, offset = 0, q } = {}) {
+    const { isUUID } = require('../utils/validators');
+    if (!isUUID(artist_id)) throw new Error('artist_id is invalid');
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    let qb = client()
+        .from(table)
+        .select(`
+            album_id, title, description, cover_url, genres, total_tracks, likes_count, created_at, updated_at, is_published, duration,
+            album_artists:album_artists!inner(
+                role,
+                artists:artists!album_artists_artist_id_fkey(
+                    artist_id,
+                    users:users!artists_artist_id_fkey(user_id, name, avatar_url)
+                )
+            )
+        `, { count: 'exact' })
+        .eq('album_artists.artist_id', artist_id)
+        .order('created_at', { ascending: false });
+    if (q) qb = qb.ilike('title', `%${q}%`);
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    const items = (data || []).map(row => ({
+        album_id: row.album_id,
+        title: row.title,
+        description: row.description,
+        cover_url: row.cover_url,
+        genres: row.genres,
+        total_tracks: row.total_tracks,
+        likes_count: row.likes_count,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        is_published: row.is_published,
+        duration: row.duration,
+        artists: (row.album_artists || []).map(a => ({
+            artist_id: a?.artists?.artist_id || null,
+            role: a?.role || null,
+            name: a?.artists?.users?.name || null,
+            avatar_url: a?.artists?.users?.avatar_url || null,
+        }))
+    }));
+    return { items, total: count };
+}
+
+async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } = {}) {
+    const { isUUID } = require('../utils/validators');
+    if (!isUUID(artist_id)) throw new Error('artist_id is invalid');
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    let qb = client()
+        .from(table)
+        .select(`
+            album_id, title, cover_url, duration, created_at,
+            album_artists:album_artists!inner(
+                role,
+                artists:artists!album_artists_artist_id_fkey(
+                    artist_id,
+                    users:users!artists_artist_id_fkey(name, avatar_url)
+                )
+            )
+        `, { count: 'exact' })
+        .eq('is_published', true)
+        .eq('album_artists.artist_id', artist_id)
+        .order('created_at', { ascending: false });
+    if (q) qb = qb.ilike('title', `%${q}%`);
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    const items = (data || []).map(row => ({
+        album_id: row.album_id,
+        title: row.title,
+        cover_url: row.cover_url,
+        duration: row.duration,
+        created_at: row.created_at,
+        artists: (row.album_artists || []).map(a => ({
+            artist_id: a?.artists?.artist_id || null,
+            name: a?.artists?.users?.name || null,
+            avatar_url: a?.artists?.users?.avatar_url || null,
+            role: a?.role || null,
+        }))
+    }));
+    return { items, total: count };
+}
+
+module.exports.listAlbumsByArtist = listAlbumsByArtist;
+module.exports.listAlbumsByArtistUser = listAlbumsByArtistUser;

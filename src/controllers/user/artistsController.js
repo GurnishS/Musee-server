@@ -7,6 +7,8 @@ const {
     listArtistsUser,
     getArtistUser,
 } = require('../../models/artistModel');
+const { listTracksByArtistUser } = require('../../models/trackModel');
+const { listAlbumsByArtistUser } = require('../../models/albumModel');
 const { updateUser } = require('../../models/userModel');
 const { uploadArtistCoverToStorage } = require('../../utils/supabaseStorage');
 
@@ -99,3 +101,27 @@ async function remove(req, res) {
 }
 
 module.exports = { list, getOne, create, update, remove };
+// GET /api/user/artists/:id/tracks
+async function listTracks(req, res) {
+    const { id } = req.params;
+    const limit = Math.min(100, Number(req.query.limit) || 20);
+    const page = Math.max(0, Number(req.query.page) || 0);
+    const q = req.query.q || undefined;
+    const offset = page * limit;
+    const { items, total } = await listTracksByArtistUser({ artist_id: id, limit, offset, q });
+    res.json({ items, total, page, limit });
+}
+
+// GET /api/user/artists/:id/albums
+async function listAlbums(req, res) {
+    const { id } = req.params;
+    const limit = Math.min(100, Number(req.query.limit) || 20);
+    const page = Math.max(0, Number(req.query.page) || 0);
+    const q = req.query.q || undefined;
+    const offset = page * limit;
+    const { items, total } = await listAlbumsByArtistUser({ artist_id: id, limit, offset, q });
+    res.json({ items, total, page, limit });
+}
+
+module.exports.listTracks = listTracks;
+module.exports.listAlbums = listAlbums;

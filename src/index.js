@@ -9,6 +9,7 @@ const rateLimit = require('express-rate-limit');
 const createError = require('http-errors');
 
 const { supabase } = require('./db/config');
+const { getRedisClient } = require('./utils/redisClient');
 
 const app = express();
 
@@ -94,6 +95,15 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
     console.log(`Musee API listening on port ${PORT}`);
 });
+
+const redisClient = getRedisClient();
+redisClient
+    .then(() => {
+        console.log('Redis client connected');
+    })
+    .catch((err) => {
+        console.error('Redis client connection error:', err);
+    });
 
 module.exports = app;
 

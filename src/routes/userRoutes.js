@@ -12,6 +12,7 @@ const tracksRoutes = require('./user/trackRoutes');
 const playlistsRoutes = require('./user/playlistRoutes');
 const followRoutes = require('./user/followRoutes');
 const dashboardRoutes = require('./user/dashboardRoutes');
+const queueRoutes = require('./user/queueRoutes');
 
 
 router.use(authUser);
@@ -25,5 +26,6 @@ router.use('/tracks', tracksRoutes);
 router.use('/playlists', playlistsRoutes);
 router.use('/follows', followRoutes);
 router.use('/dashboard', dashboardRoutes);
+router.use('/queue', queueRoutes);
 
 module.exports = router;

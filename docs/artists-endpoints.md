@@ -147,6 +147,26 @@ Errors:
 
 ---
 
+### GET /api/admin/artists/:id/tracks
+List all tracks linked to an artist (no publish filter).
+
+Query params: `page`, `limit`, `q`
+
+Response: `{ items, total, page, limit }`
+- Each item includes: `track_id, title, album_id, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published, hls { master, variants[] }, artists[], audios[]`
+
+---
+
+### GET /api/admin/artists/:id/albums
+List all albums linked to an artist (no publish filter).
+
+Query params: `page`, `limit`, `q`
+
+Response: `{ items, total, page, limit }`
+- Each item includes: `album_id, title, description, cover_url, genres, total_tracks, likes_count, created_at, updated_at, is_published, duration, artists[]`
+
+---
+
 ### POST /api/user/artists
 Create artist profile for the authenticated user (user becomes artist).
 
@@ -193,6 +213,26 @@ Response:
 - 204 No Content
 - 403 if not owner
 - 404 if not found
+
+---
+
+### GET /api/user/artists/:id/tracks
+List published tracks for a given artist.
+
+Query params: `page`, `limit`, `q`
+
+Response: `{ items, total, page, limit }`
+- Each item includes: `track_id, title, duration, created_at, hls { master, variants[] }, artists[]`
+
+---
+
+### GET /api/user/artists/:id/albums
+List published albums for a given artist.
+
+Query params: `page`, `limit`, `q`
+
+Response: `{ items, total, page, limit }`
+- Each item includes: `album_id, title, cover_url, duration, created_at, artists[]`
 
 ---
 
