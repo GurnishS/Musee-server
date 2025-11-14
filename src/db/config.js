@@ -1,5 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { BlobServiceClient } = require('@azure/storage-blob');
+const dotenv = require('dotenv');
+dotenv.config();
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;

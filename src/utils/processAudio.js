@@ -13,6 +13,16 @@ ffmpeg.setFfprobePath(ffprobePath);
 
 const containerClient = blobServiceClient ? blobServiceClient.getContainerClient(containerName) : null;
 
+// Tuning/config (can be overridden via ENV)
+const GEN_PROGRESSIVE = process.env.GENERATE_PROGRESSIVE !== '0'; // 1/true by default to preserve behavior
+const HLS_VARIANTS = (process.env.GENERATE_HLS_VARIANTS || '96,160,320')
+    .split(',')
+    .map(s => parseInt(s.trim(), 10))
+    .filter(n => Number.isFinite(n) && n > 0);
+const HLS_SEGMENT_SECONDS = Number(process.env.HLS_SEGMENT_DURATION || 4); // default 4s
+const FFMPEG_THREADS = process.env.FFMPEG_THREADS || '16'; // per-encode thread hint
+const UPLOAD_CONCURRENCY = Number(process.env.UPLOAD_CONCURRENCY || 38);
+
 function ffprobe(filePath) {
     return new Promise((resolve, reject) => ffmpeg.ffprobe(filePath, (err, metadata) => (err ? reject(err) : resolve(metadata))));
 }
@@ -23,6 +33,7 @@ function convertToOgg(inputPath, outputPath, bitrateKbps) {
             .noVideo()
             .audioCodec('libvorbis')
             .audioBitrate(`${bitrateKbps}k`)
+            .addOption('-threads', FFMPEG_THREADS)
             .save(outputPath)
             .on('end', () => resolve(outputPath))
             .on('error', reject);
@@ -35,6 +46,7 @@ function convertToMp3(inputPath, outputPath, bitrateKbps) {
             .noVideo()
             .audioCodec('libmp3lame')
             .audioBitrate(`${bitrateKbps}k`)
+            .addOption('-threads', FFMPEG_THREADS)
             .save(outputPath)
             .on('end', () => resolve(outputPath))
             .on('error', reject);
@@ -95,30 +107,21 @@ async function processAudioBuffer(audioFile, trackId) {
     if (!bitrate) throw new Error('Unable to determine audio bitrate');
 
     // variants to generate (kbps)
-    const variants = [96, 160, 320];
+    const variants = HLS_VARIANTS.length ? HLS_VARIANTS : [96, 160, 320];
     const generated = {};
 
-    // create mp3 at original bitrate
-    const mp3Ext = 'mp3';
-    const mp3Filename = `track_${trackId}_${bitrate}k.${mp3Ext}`;
-    const mp3Local = path.join(tmpDir, mp3Filename);
-    await convertToMp3(infile, mp3Local, bitrate);
-    const mp3Blob = `audio/${mp3Filename}`;
-    const mp3Path = await uploadToBlob(mp3Local, mp3Blob);
-    generated[`${bitrate}k_mp3`] = mp3Path;
-
-    // create ogg variants up to original bitrate
-    for (const kb of variants) {
-        if (bitrate >= kb) {
-            const oggExt = 'ogg';
-            const oggFilename = `track_${trackId}_${kb}k.${oggExt}`;
-            const oggLocal = path.join(tmpDir, oggFilename);
-            await convertToOgg(infile, oggLocal, kb);
-            const oggBlob = `audio/${oggFilename}`;
-            const oggPath = await uploadToBlob(oggLocal, oggBlob);
-            generated[`${kb}k_ogg`] = oggPath;
-        }
+    // create mp3 at original bitrate (optional toggle)
+    if (GEN_PROGRESSIVE) {
+        const mp3Ext = 'mp3';
+        const mp3Filename = `track_${trackId}_${bitrate}k.${mp3Ext}`;
+        const mp3Local = path.join(tmpDir, mp3Filename);
+        await convertToMp3(infile, mp3Local, bitrate);
+        const mp3Blob = `audio/${mp3Filename}`;
+        const mp3Path = await uploadToBlob(mp3Local, mp3Blob);
+        generated[`${bitrate}k_mp3`] = mp3Path;
     }
+
+    // OGG generation removed (keep only original MP3). Set GENERATE_PROGRESSIVE=0 to skip even MP3.
 
     // Generate HLS variants and master playlist
     const hlsRootDir = path.join(tmpDir, `hls_${trackId}_${uuidv4()}`);
@@ -134,10 +137,14 @@ async function processAudioBuffer(audioFile, trackId) {
                 .noVideo()
                 .audioCodec('aac')
                 .audioBitrate(`${kb}k`)
+                .audioChannels(2)
+                .addOption('-ar', '48000')
+                .addOption('-threads', FFMPEG_THREADS)
                 .format('hls')
                 .outputOptions([
-                    '-hls_time 4',
+                    `-hls_time ${HLS_SEGMENT_SECONDS}`,
                     '-hls_playlist_type vod',
+                    '-hls_flags independent_segments',
                     `-hls_segment_filename ${segPattern.replace(/\\/g, '/')}`,
                 ])
                 .output(playlistPath)
@@ -146,40 +153,55 @@ async function processAudioBuffer(audioFile, trackId) {
                 .run();
         });
     }
-
-    for (const kb of variants) {
-        await generateHlsVariant(kb);
-    }
+    // Generate HLS variants in parallel to utilize multiple cores
+    await Promise.all(variants.map(kb => generateHlsVariant(kb)));
 
     // Write master.m3u8
     const masterPath = path.join(hlsRootDir, 'master.m3u8');
+    // derive BANDWIDTH approximately as bitrate * 1000 + overhead
+    const entries = variants.map(kb => [
+        `#EXT-X-STREAM-INF:BANDWIDTH=${kb * 1000 * 2},CODECS="mp4a.40.2"`,
+        `v${kb}/index.m3u8`,
+    ]).flat();
     const masterContent = [
         '#EXTM3U',
         '#EXT-X-VERSION:3',
         '#EXT-X-INDEPENDENT-SEGMENTS',
-        '#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="mp4a.40.2"',
-        'v96/index.m3u8',
-        '#EXT-X-STREAM-INF:BANDWIDTH=192000,CODECS="mp4a.40.2"',
-        'v160/index.m3u8',
-        '#EXT-X-STREAM-INF:BANDWIDTH=384000,CODECS="mp4a.40.2"',
-        'v320/index.m3u8',
+        ...entries,
         ''
     ].join('\n');
     fs.writeFileSync(masterPath, masterContent, 'utf8');
 
     // Upload HLS tree under hls/track_<trackId>/
+    function listFilesRecursive(localDir) {
+        const files = [];
+        const stack = [localDir];
+        while (stack.length) {
+            const dir = stack.pop();
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+                const full = path.join(dir, ent.name);
+                if (ent.isDirectory()) stack.push(full);
+                else files.push(full);
+            }
+        }
+        return files;
+    }
     async function uploadDir(localDir, baseBlobPrefix) {
-        const entries = fs.readdirSync(localDir, { withFileTypes: true });
-        for (const ent of entries) {
-            const local = path.join(localDir, ent.name);
-            const rel = path.relative(hlsRootDir, local).replace(/\\/g, '/');
-            const blobName = `${baseBlobPrefix}/${rel}`;
-            if (ent.isDirectory()) {
-                await uploadDir(local, baseBlobPrefix);
-            } else {
+        const files = listFilesRecursive(localDir);
+        // simple concurrency limiter
+        let i = 0;
+        async function worker() {
+            while (i < files.length) {
+                const idx = i++;
+                const local = files[idx];
+                const rel = path.relative(hlsRootDir, local).replace(/\\/g, '/');
+                const blobName = `${baseBlobPrefix}/${rel}`;
                 await uploadToBlob(local, blobName);
             }
         }
+        const conc = Math.max(1, UPLOAD_CONCURRENCY);
+        await Promise.all(Array.from({ length: conc }, () => worker()));
     }
     const hlsPrefix = `hls/track_${trackId}`;
     await uploadDir(hlsRootDir, hlsPrefix);
