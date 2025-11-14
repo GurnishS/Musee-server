@@ -10,6 +10,7 @@ const albumsRoutes = require('./admin/albumRoutes');
 const playlistsRoutes = require('./admin/playlistRoutes');
 const countriesRoutes = require('./admin/countryRoutes');
 const regionsRoutes = require('./admin/regionRoutes');
+const metricsRoutes = require('./admin/metricsRoutes');
 
 router.use(authAdmin);
 router.use('/plans', plansRoutes);
@@ -20,5 +21,6 @@ router.use('/albums', albumsRoutes);
 router.use('/playlists', playlistsRoutes);
 router.use('/countries', countriesRoutes);
 router.use('/regions', regionsRoutes);
+router.use('/metrics', metricsRoutes);
 
 module.exports = router;
